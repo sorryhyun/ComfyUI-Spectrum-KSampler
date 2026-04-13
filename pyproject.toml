@@ -6,7 +6,7 @@ license = { file = "LICENSE" }
 dependencies = []
 
 [project.urls]
-Repository = "https://github.com/sorryhyun/anima_lora/tree/main/custom_nodes/comfyui-spectrum"
+Repository = "https://github.com/sorryhyun/ComfyUI-Spectrum-KSampler"
 
 
 [tool.comfy]
