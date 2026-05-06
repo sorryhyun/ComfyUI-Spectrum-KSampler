@@ -12,6 +12,7 @@ import latent_preview
 
 from .forecaster import SpectrumPredictor
 from .dcw import install_dcw
+from .dcw_calibrator import setup_dcw_calibrator
 
 logger = logging.getLogger(__name__)
 
@@ -123,24 +124,58 @@ def spectrum_sample(
     blend_w,
     cheby_degree,
     ridge_lambda,
-    dcw_lambda: float = -0.015,
+    dcw_mode: str = "manual",
+    dcw_lambda: float = 0.01,
     dcw_schedule: str = "one_minus_sigma",
     dcw_band_mask: str = "LL",
+    dcw_calibrator: Optional[str] = None,
+    clip=None,
 ):
     """Shared Spectrum sampling logic used by all node tiers.
 
-    dcw_lambda: DCW bias-correction strength. 0.0 = disabled. Default -0.015
-        is tuned for the LL-only band mask (negative — opposite-sign from the
-        paper). See anima_lora/docs/methods/dcw.md.
-    dcw_band_mask: Restrict DCW correction to a subset of single-level Haar
-        subbands. Default 'LL' is strictly better than broadband on Anima
-        (improves all four bands; broadband worsens detail bands). Use 'all'
-        for the paper-form correction; tune ``dcw_lambda`` to ≈ -0.010 then.
+    dcw_mode: "off" / "manual" / "auto".
+        - off: no DCW correction.
+        - manual: scalar λ × schedule(σ_i), tunable via dcw_lambda + dcw_band_mask.
+            Default 0.01 is the verified hyperparam for CFG ≥ ~2 with LL-only.
+        - auto: per-step λ predicted by an OnlineDCWCalibrator fusion head.
+            Requires ``clip`` (the same CLIP encoder feeding ``positive``) to
+            recover post-LLM-adapter c_pool. ``dcw_calibrator`` names the
+            artifact (or the auto-download sentinel). Forces band_mask = LL.
+
+    dcw_lambda: scalar DCW strength used in manual mode. 0.0 = no-op even
+        if mode != off. See anima_lora/docs/methods/dcw.md.
+    dcw_band_mask: Subband restriction (manual mode only). Default 'LL' is
+        strictly better than broadband on Anima.
     """
     m = model.clone()
 
-    # DCW: register CALC_COND_BATCH wrapper + post-CFG hook only when enabled.
-    install_dcw(m, lam=dcw_lambda, schedule=dcw_schedule, band_mask=dcw_band_mask)
+    # Auto mode: load + setup the calibrator. If anything fails, fall back to
+    # manual semantics (dcw_lambda × schedule) — never hard-error mid-sample.
+    calibrator = None
+    if dcw_mode == "auto":
+        if warmup_steps < 7:
+            raise RuntimeError(
+                f"auto-DCW needs spectrum warmup_steps >= calibrator k_warmup (=7); "
+                f"got warmup_steps={warmup_steps}. Use manual mode or raise warmup."
+            )
+        if positive is None or clip is None:
+            logger.warning(
+                "auto-DCW: missing clip / positive — falling back to manual."
+            )
+        else:
+            calibrator = setup_dcw_calibrator(m, clip, positive, dcw_calibrator)
+
+    # DCW: register CALC_COND_BATCH wrapper + post-CFG hook.
+    if dcw_mode == "off":
+        pass  # no hooks
+    else:
+        install_dcw(
+            m,
+            lam=dcw_lambda,
+            schedule=dcw_schedule,
+            band_mask=dcw_band_mask,
+            calibrator=calibrator,
+        )
 
     state = SpectrumState(
         window_size=window_size,

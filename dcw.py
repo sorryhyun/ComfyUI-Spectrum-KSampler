@@ -111,12 +111,22 @@ class DCWState:
         lam: float,
         schedule: str = "one_minus_sigma",
         bands: frozenset[str] = ALL_BANDS,
+        calibrator=None,
     ):
         self.lam = lam
         self.schedule = schedule
         self.bands = bands
+        # Auto mode: calibrator emits per-step λ (envelope already baked in,
+        # so the wrapper applies it with schedule="const").
+        self.calibrator = calibrator
+        self.auto = calibrator is not None
         self.last_denoised: Optional[torch.Tensor] = None
+        self.last_x_in: Optional[torch.Tensor] = None
         self.curr_sigma: Optional[float] = None
+        # Integer step index — incremented on each new-σ boundary in the
+        # CALC_COND_BATCH wrapper. Used by the calibrator's record / fire /
+        # lambda_for_step.  -1 = no step has started yet.
+        self.step_idx: int = -1
 
     def schedule_value(self, sigma_i: Optional[float]) -> float:
         if sigma_i is None:
@@ -171,13 +181,27 @@ def _make_dcw_calc_cond_batch_wrapper(state: DCWState):
             state.curr_sigma is None or abs(sigma - state.curr_sigma) > 1e-8
         )
         if new_step:
-            if state.last_denoised is not None and state.lam != 0.0:
-                s = state.lam * state.schedule_value(state.curr_sigma)
+            if state.last_denoised is not None:
+                if state.auto:
+                    # Calibrator returns the post-envelope λ_i directly.
+                    # state.step_idx == previous step's index (we increment after).
+                    s = state.calibrator.lambda_for_step(
+                        state.step_idx, state.curr_sigma or 0.0
+                    )
+                elif state.lam != 0.0:
+                    s = state.lam * state.schedule_value(state.curr_sigma)
+                else:
+                    s = 0.0
                 if s != 0.0:
                     _apply_correction_inplace(
                         x_in, state.last_denoised, s, state.bands
                     )
             state.curr_sigma = sigma
+            state.step_idx += 1
+        # Cache x_in *after* correction; post-CFG hook needs it to recover the
+        # post-CFG velocity v = (x_in - denoised) / σ for haar_LL_norm.
+        if state.auto:
+            state.last_x_in = x_in.detach()
         return executor(model, conds, x_in, timestep, model_options)
 
     return wrapper
@@ -187,8 +211,22 @@ def _make_dcw_post_cfg_hook(state: DCWState):
     def hook(args):
         # args["denoised"] is post-CFG x0_pred. Clone so the cache survives
         # downstream in-place ops on the sampler's tensors.
-        state.last_denoised = args["denoised"].clone()
-        return args["denoised"]
+        denoised = args["denoised"]
+        state.last_denoised = denoised.clone()
+        if state.auto and state.calibrator is not None:
+            calib = state.calibrator
+            sigma = state.curr_sigma
+            if (
+                state.step_idx < calib.k_warmup
+                and state.last_x_in is not None
+                and sigma is not None
+                and sigma > 0.0
+            ):
+                # Post-CFG velocity. CONST model_sampling: denoised = x_in - σ * v.
+                v = (state.last_x_in - denoised) / sigma
+                calib.record(state.step_idx, v)
+            calib.fire_head_if_due(state.step_idx)
+        return denoised
 
     return hook
 
@@ -199,16 +237,25 @@ def install_dcw(
     lam: float,
     schedule: str = "one_minus_sigma",
     band_mask: str = "LL",
+    calibrator=None,
 ) -> None:
-    """Register DCW hooks on a cloned ModelPatcher (no-op when lam == 0).
+    """Register DCW hooks on a cloned ModelPatcher (no-op when disabled).
 
     Caller must clone the model patcher before passing it in — this
     mutates ``model_patcher.model_options`` and registers a post-CFG
     hook on the patcher.
+
+    When ``calibrator`` is given, runs in auto mode: per-step λ comes from
+    ``calibrator.lambda_for_step`` and ``band_mask`` is forced to ``LL`` to
+    match the head's training distribution. When ``calibrator`` is ``None``,
+    runs the legacy scalar-λ path; ``lam == 0`` makes that a no-op.
     """
-    if lam == 0.0:
+    if calibrator is None and lam == 0.0:
         return
-    state = DCWState(lam=lam, schedule=schedule, bands=parse_band_mask(band_mask))
+    bands = frozenset({"LL"}) if calibrator is not None else parse_band_mask(band_mask)
+    state = DCWState(
+        lam=lam, schedule=schedule, bands=bands, calibrator=calibrator
+    )
     comfy.patcher_extension.add_wrapper(
         comfy.patcher_extension.WrappersMP.CALC_COND_BATCH,
         _make_dcw_calc_cond_batch_wrapper(state),

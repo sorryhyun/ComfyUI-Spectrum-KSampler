@@ -6,9 +6,17 @@ import folder_paths
 from .mod_guidance import AUTO_ADAPTER_SENTINEL, setup_mod_guidance
 from .spectrum import spectrum_sample
 
+AUTO_CALIBRATOR_SENTINEL = "(auto-download default)"
+
 
 def _adapter_choices():
     return [AUTO_ADAPTER_SENTINEL] + folder_paths.get_filename_list("loras")
+
+
+def _calibrator_choices():
+    # Re-uses the loras directory for user-supplied artifacts (same convention
+    # as mod-guidance adapters). Auto-download lands in models/anima_dcw_calibrator/.
+    return [AUTO_CALIBRATOR_SENTINEL] + folder_paths.get_filename_list("loras")
 
 # ---------------------------------------------------------------------------
 # Common input definitions
@@ -238,21 +246,38 @@ _SPECTRUM_DEFAULTS = dict(
 # DCW: SNR-t bias correction (arXiv:2604.16044). Anima form, λ < 0,
 # schedule fixed to one_minus_sigma. See anima_lora/docs/methods/dcw.md.
 _DCW_INPUTS = {
+    "dcw_mode": (
+        ["off", "manual", "auto"],
+        {
+            "default": "manual",
+            "tooltip": (
+                "DCW correction mode. "
+                "'off' disables correction entirely. "
+                "'manual' uses the scalar dcw_lambda × schedule(σ) — predictable, "
+                "user-tunable. "
+                "'auto' uses an OnlineDCWCalibrator fusion head (~few MB, "
+                "auto-downloaded on first use) to predict per-prompt λ̂ from "
+                "warmup observations of the post-CFG velocity. Forces band='LL'. "
+                "Tuned at CFG=4 — at CFG≈1 the head's α̂ direction may "
+                "overshoot; prefer manual then."
+            ),
+        },
+    ),
     "dcw_lambda": (
         "FLOAT",
         {
-            "default": -0.015,
+            "default": 0.01,
             "min": -1.0,
             "max": 1.0,
             "step": 0.001,
             "round": 0.0001,
             "tooltip": (
-                "DCW post-step bias correction strength. 0.0 = disabled. "
-                "Default -0.015 is tuned for the LL-only band mask "
-                "(negative — see anima_lora docs/methods/dcw.md). "
-                "Schedule fixed to one_minus_sigma. Use ≈ -0.010 if you "
-                "switch dcw_band_mask to 'all'. Composes with Spectrum + "
-                "mod guidance; sampler-agnostic."
+                "DCW post-step bias correction strength (manual mode). 0.0 = "
+                "disabled. Default +0.01 is the verified hyperparam for "
+                "LL-only at CFG≥~2 (recovers detail at non-square aspects). "
+                "At CFG=1 / 1024² use ≈ -0.015. Schedule fixed to "
+                "one_minus_sigma. Composes with Spectrum + mod guidance; "
+                "sampler-agnostic. Ignored in auto mode."
             ),
         },
     ),
@@ -262,10 +287,23 @@ _DCW_INPUTS = {
             "default": "LL",
             "tooltip": (
                 "Restrict DCW correction to a subset of single-level Haar "
-                "subbands. 'LL' (default) is strictly better than broadband on "
-                "Anima — improves all four bands while 'all' worsens detail "
-                "bands. 'all' = paper-form broadband correction. 'HH' / "
-                "'LH+HL+HH' are ablation modes."
+                "subbands (manual mode). 'LL' (default) is strictly better "
+                "than broadband on Anima — improves all four bands while "
+                "'all' worsens detail bands. 'all' = paper-form broadband "
+                "correction. 'HH' / 'LH+HL+HH' are ablation modes. "
+                "Forced to 'LL' in auto mode."
+            ),
+        },
+    ),
+    "dcw_calibrator": (
+        _calibrator_choices(),
+        {
+            "tooltip": (
+                "Fusion-head safetensors artifact (auto mode only). "
+                f"'{AUTO_CALIBRATOR_SENTINEL}' fetches the default head from "
+                "the ComfyUI-Spectrum-KSampler release page on first use "
+                "(stored under models/anima_dcw_calibrator/). Custom artifacts "
+                "are picked up from the loras directory."
             ),
         },
     ),
@@ -282,7 +320,15 @@ class SpectrumKSampler:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {**_KSAMPLER_INPUTS, **_DCW_INPUTS}}
+        # `clip` is required so auto-DCW can recover post-LLM-adapter c_pool.
+        # Manual / off modes don't use it but the slot stays connected.
+        return {
+            "required": {
+                **_KSAMPLER_INPUTS,
+                "clip": ("CLIP", {"tooltip": "CLIP encoder (required for auto-DCW)."}),
+                **_DCW_INPUTS,
+            }
+        }
 
     RETURN_TYPES = ("LATENT",)
     FUNCTION = "sample"
@@ -304,9 +350,12 @@ class SpectrumKSampler:
         positive,
         negative,
         latent_image,
+        clip,
         denoise=1.0,
-        dcw_lambda=-0.015,
+        dcw_mode="manual",
+        dcw_lambda=0.01,
         dcw_band_mask="LL",
+        dcw_calibrator=AUTO_CALIBRATOR_SENTINEL,
     ):
         return spectrum_sample(
             model,
@@ -320,8 +369,11 @@ class SpectrumKSampler:
             latent_image,
             denoise,
             **_SPECTRUM_DEFAULTS,
+            dcw_mode=dcw_mode,
             dcw_lambda=dcw_lambda,
             dcw_band_mask=dcw_band_mask,
+            dcw_calibrator=dcw_calibrator,
+            clip=clip,
         )
 
 
@@ -360,8 +412,10 @@ class SpectrumKSamplerModGuidance:
         quality_tags,
         mod_w_profile,
         denoise=1.0,
-        dcw_lambda=-0.015,
+        dcw_mode="manual",
+        dcw_lambda=0.01,
         dcw_band_mask="LL",
+        dcw_calibrator=AUTO_CALIBRATOR_SENTINEL,
     ):
         profile = MOD_W_PROFILES.get(mod_w_profile) or MOD_W_PROFILES[DEFAULT_MOD_W_PROFILE]
         m = model.clone()
@@ -391,8 +445,11 @@ class SpectrumKSamplerModGuidance:
             latent_image,
             denoise,
             **_SPECTRUM_DEFAULTS,
+            dcw_mode=dcw_mode,
             dcw_lambda=dcw_lambda,
             dcw_band_mask=dcw_band_mask,
+            dcw_calibrator=dcw_calibrator,
+            clip=clip,
         )
 
 
@@ -447,8 +504,10 @@ class SpectrumKSamplerAdvanced:
         blend_w=0.3,
         cheby_degree=3,
         ridge_lambda=0.1,
-        dcw_lambda=-0.015,
+        dcw_mode="manual",
+        dcw_lambda=0.01,
         dcw_band_mask="LL",
+        dcw_calibrator=AUTO_CALIBRATOR_SENTINEL,
     ):
         m = model.clone()
         setup_mod_guidance(
@@ -482,8 +541,11 @@ class SpectrumKSamplerAdvanced:
             blend_w=blend_w,
             cheby_degree=cheby_degree,
             ridge_lambda=ridge_lambda,
+            dcw_mode=dcw_mode,
             dcw_lambda=dcw_lambda,
             dcw_band_mask=dcw_band_mask,
+            dcw_calibrator=dcw_calibrator,
+            clip=clip,
         )
 
 
