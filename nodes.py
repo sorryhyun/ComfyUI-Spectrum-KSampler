@@ -245,28 +245,49 @@ _SPECTRUM_DEFAULTS = dict(
     ridge_lambda=0.1,
 )
 
+# SMC-CFG: α-adaptive sliding-mode CFG combine (Wang et al., arXiv:2603.03281,
+# Anima α-adaptive form — see anima_lora/docs/methods/smc_cfg.md). Replaces the
+# vanilla `uncond + w·(cond-uncond)` combine; no extra forwards. α=0 disables.
+_SMC_CFG_LAMBDA_DEFAULT = 5.0
+_SMC_CFG_ALPHA_DEFAULT = 0.2
+
+_SMC_CFG_ALPHA_INPUT = (
+    "FLOAT",
+    {
+        "default": _SMC_CFG_ALPHA_DEFAULT,
+        "min": 0.0,
+        "max": 1.0,
+        "step": 0.05,
+        "round": 0.001,
+        "tooltip": (
+            "α-adaptive Sliding-Mode Control CFG gain. "
+            "0 disables (vanilla CFG combine). 0.2 = production default — "
+            "k_t := α·mean(|v_cond − v_uncond|) per step keeps the bang-bang "
+            "correction in-band across CFG/σ/sample (paper's fixed k=0.1 was "
+            "~14× off on Anima at CFG=4). Recovers detail (fingers, eyes, text); "
+            "outputs run slightly darker. Auto-disabled when CFG=1."
+        ),
+    },
+)
+_SMC_CFG_LAMBDA_INPUT = (
+    "FLOAT",
+    {
+        "default": _SMC_CFG_LAMBDA_DEFAULT,
+        "min": 0.0,
+        "max": 20.0,
+        "step": 0.5,
+        "round": 0.1,
+        "tooltip": (
+            "SMC-CFG sliding-manifold slope λ. Paper sweep {3,4,5,6}; 5 best. "
+            "Higher λ tightens the sign() pattern's grip on small-|e| channels "
+            "(more detail recovery, more darkening); lower λ attenuates both."
+        ),
+    },
+)
+
 # DCW: SNR-t bias correction (arXiv:2604.16044). Anima form, λ < 0,
 # schedule fixed to one_minus_sigma. See anima_lora/docs/methods/dcw.md.
-
-# Simple on/off toggle for the basic nodes — "on" maps to auto mode
-# (OnlineDCWCalibrator fusion head, auto-downloaded on first use). Manual mode,
-# custom λ, band, or calibrator override live on the Advanced node only.
-_DCW_SIMPLE_INPUTS = {
-    "dcw": (
-        ["on", "off"],
-        {
-            "default": "off",
-            "tooltip": (
-                "DCW post-step bias correction. 'on' uses auto mode "
-                "(per-prompt λ̂ from the OnlineDCWCalibrator fusion head, "
-                "auto-downloaded on first use). 'off' disables correction. "
-                "For manual mode, custom λ / band / calibrator override use "
-                "the Advanced node."
-            ),
-        },
-    ),
-}
-
+# Exposed on the Advanced node only — the basic + mod nodes default to off.
 _DCW_INPUTS = {
     "dcw_mode": (
         ["off", "manual", "auto"],
@@ -342,12 +363,10 @@ class SpectrumKSampler:
 
     @classmethod
     def INPUT_TYPES(cls):
-        # `clip` is required so auto-DCW can recover post-LLM-adapter c_pool.
         return {
             "required": {
                 **_KSAMPLER_INPUTS,
-                "clip": ("CLIP", {"tooltip": "CLIP encoder (required for auto-DCW)."}),
-                **_DCW_SIMPLE_INPUTS,
+                "adaptive_smc_alpha": _SMC_CFG_ALPHA_INPUT,
             }
         }
 
@@ -357,7 +376,9 @@ class SpectrumKSampler:
     DESCRIPTION = (
         "Spectrum-accelerated sampler. Drop-in KSampler replacement that "
         "skips transformer blocks on predicted steps via Chebyshev polynomial "
-        "feature forecasting for ~2-3x speedup. Uses sensible defaults."
+        "feature forecasting for ~2-3x speedup. Optional α-adaptive SMC-CFG "
+        "(default 0.2) modifies the CFG combine for detail recovery. DCW "
+        "lives on the Advanced node."
     )
 
     def sample(
@@ -371,11 +392,9 @@ class SpectrumKSampler:
         positive,
         negative,
         latent_image,
-        clip,
         denoise=1.0,
-        dcw="off",
+        adaptive_smc_alpha=_SMC_CFG_ALPHA_DEFAULT,
     ):
-        dcw_mode = "auto" if dcw == "on" else "off"
         return spectrum_sample(
             model,
             seed,
@@ -388,11 +407,9 @@ class SpectrumKSampler:
             latent_image,
             denoise,
             **_SPECTRUM_DEFAULTS,
-            dcw_mode=dcw_mode,
-            dcw_lambda=0.01,
-            dcw_band_mask="LL",
-            dcw_calibrator=AUTO_CALIBRATOR_SENTINEL,
-            clip=clip,
+            dcw_mode="off",
+            smc_cfg_alpha=adaptive_smc_alpha,
+            smc_cfg_lambda=_SMC_CFG_LAMBDA_DEFAULT,
         )
 
 
@@ -401,7 +418,13 @@ class SpectrumKSamplerModGuidance:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {**_KSAMPLER_INPUTS, **_MOD_GUIDANCE_SIMPLE_INPUTS, **_DCW_SIMPLE_INPUTS}}
+        return {
+            "required": {
+                **_KSAMPLER_INPUTS,
+                **_MOD_GUIDANCE_SIMPLE_INPUTS,
+                "adaptive_smc_alpha": _SMC_CFG_ALPHA_INPUT,
+            }
+        }
 
     RETURN_TYPES = ("LATENT",)
     FUNCTION = "sample"
@@ -414,6 +437,8 @@ class SpectrumKSamplerModGuidance:
         "tags are encoded through the full CLIP + LLM adapter pipeline for "
         "correct post-adapter pooling. Uses sensible Spectrum defaults and "
         "the 'step_i8' per-block guidance schedule (early-DC protected). "
+        "Optional α-adaptive SMC-CFG (default 0.2) modifies the CFG combine "
+        "for detail recovery. DCW lives on the Advanced node. "
         "Set mod_w_profile='off' to skip mod guidance entirely."
     )
 
@@ -432,7 +457,7 @@ class SpectrumKSamplerModGuidance:
         quality_tags,
         mod_w_profile,
         denoise=1.0,
-        dcw="on",
+        adaptive_smc_alpha=_SMC_CFG_ALPHA_DEFAULT,
     ):
         if mod_w_profile == MOD_W_PROFILE_OFF:
             m = model
@@ -453,7 +478,6 @@ class SpectrumKSamplerModGuidance:
                 taper_scale=profile["taper_scale"],
                 final_w=profile["final_w"],
             )
-        dcw_mode = "auto" if dcw == "on" else "off"
         return spectrum_sample(
             m,
             seed,
@@ -466,11 +490,9 @@ class SpectrumKSamplerModGuidance:
             latent_image,
             denoise,
             **_SPECTRUM_DEFAULTS,
-            dcw_mode=dcw_mode,
-            dcw_lambda=0.01,
-            dcw_band_mask="LL",
-            dcw_calibrator=AUTO_CALIBRATOR_SENTINEL,
-            clip=clip,
+            dcw_mode="off",
+            smc_cfg_alpha=adaptive_smc_alpha,
+            smc_cfg_lambda=_SMC_CFG_LAMBDA_DEFAULT,
         )
 
 
@@ -485,6 +507,8 @@ class SpectrumKSamplerAdvanced:
                 **_mod_guidance_advanced_inputs(),
                 **_SPECTRUM_INPUTS,
                 **_DCW_INPUTS,
+                "adaptive_smc_alpha": _SMC_CFG_ALPHA_INPUT,
+                "smc_cfg_lambda": _SMC_CFG_LAMBDA_INPUT,
             }
         }
 
@@ -495,7 +519,9 @@ class SpectrumKSamplerAdvanced:
         "Spectrum-accelerated sampler with modulation guidance and full "
         "control over forecasting parameters. Combines quality steering "
         "via learned pooled-text projection with adjustable Chebyshev "
-        "polynomial feature forecasting for tuned speed/quality tradeoff."
+        "polynomial feature forecasting for tuned speed/quality tradeoff. "
+        "Exposes DCW (post-step SNR-t bias correction, manual + auto modes) "
+        "and α-adaptive SMC-CFG (velocity-space sliding-mode CFG combine)."
     )
 
     def sample(
@@ -529,6 +555,8 @@ class SpectrumKSamplerAdvanced:
         dcw_lambda=0.01,
         dcw_band_mask="LL",
         dcw_calibrator=AUTO_CALIBRATOR_SENTINEL,
+        adaptive_smc_alpha=_SMC_CFG_ALPHA_DEFAULT,
+        smc_cfg_lambda=_SMC_CFG_LAMBDA_DEFAULT,
     ):
         m = model.clone()
         setup_mod_guidance(
@@ -567,6 +595,8 @@ class SpectrumKSamplerAdvanced:
             dcw_band_mask=dcw_band_mask,
             dcw_calibrator=dcw_calibrator,
             clip=clip,
+            smc_cfg_alpha=adaptive_smc_alpha,
+            smc_cfg_lambda=smc_cfg_lambda,
         )
 
 

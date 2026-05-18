@@ -14,6 +14,7 @@ import latent_preview
 from .forecaster import SpectrumPredictor
 from .dcw import install_dcw
 from .dcw_calibrator import setup_dcw_calibrator
+from .smc_cfg import install_smc_cfg
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +164,8 @@ def spectrum_sample(
     dcw_band_mask: str = "LL",
     dcw_calibrator: Optional[str] = None,
     clip=None,
+    smc_cfg_alpha: float = 0.0,
+    smc_cfg_lambda: float = 5.0,
 ):
     """Shared Spectrum sampling logic used by all node tiers.
 
@@ -179,8 +182,22 @@ def spectrum_sample(
         if mode != off. See anima_lora/docs/methods/dcw.md.
     dcw_band_mask: Subband restriction (manual mode only). Default 'LL' is
         strictly better than broadband on Anima.
+
+    smc_cfg_alpha: α-adaptive Sliding-Mode Control CFG gain. ``0`` disables
+        the modified CFG combine entirely (vanilla CFG path). ``0.2`` is the
+        production default — α=0.2 puts the bang-bang correction at ~20% of
+        the per-step mean residual magnitude, recovering detail without
+        injecting visible chattering. Velocity-space combine (preserves
+        across-step correctness when σ varies). Requires CFG ≠ 1 (auto-skipped).
+    smc_cfg_lambda: SMC sliding-manifold slope λ. Paper sweep {3,4,5,6}; 5 best.
     """
     m = model.clone()
+
+    # SMC-CFG: replace the CFG combine before any sampler call. Alpha=0 is
+    # the universal off-switch; CFG=1 also short-circuits since there is no
+    # cond/uncond residual to slide on.
+    if smc_cfg_alpha > 0.0 and not math.isclose(cfg, 1.0):
+        install_smc_cfg(m, alpha=smc_cfg_alpha, lam=smc_cfg_lambda)
 
     # Auto mode: load + setup the calibrator. If anything fails, fall back to
     # manual semantics (dcw_lambda × schedule) — never hard-error mid-sample.

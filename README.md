@@ -2,7 +2,18 @@
 
 Training-free diffusion sampling acceleration via **Chebyshev polynomial feature forecasting** ([Han et al., CVPR 2026](https://arxiv.org/abs/2603.01623)). Drop-in KSampler replacement that skips transformer blocks on predicted steps for ~2-3x speedup.
 
-Tuned for the [Anima](https://github.com/sorryhyun/anima_lora) DiT — its modulation guidance, DCW calibrator artifacts, and per-block guidance presets are derived from the Anima training/inference pipeline. See the [anima_lora repo](https://github.com/sorryhyun/anima_lora) for the underlying methods documentation (`docs/methods/dcw.md`, `docs/methods/mod-guidance.md`, `docs/methods/spectrum.md`).
+Tuned for the [Anima](https://github.com/sorryhyun/anima_lora) DiT — its modulation guidance, DCW calibrator artifacts, and per-block guidance presets are derived from the Anima training/inference pipeline. See the [anima_lora repo](https://github.com/sorryhyun/anima_lora) for the underlying methods documentation (`docs/methods/dcw.md`, `docs/methods/mod-guidance.md`, `docs/methods/smc_cfg.md`, `docs/methods/spectrum.md`).
+
+## Contents
+
+- [How it works](#how-it-works) — Chebyshev forecasting, adaptive window schedule
+- [Usage](#usage) — node placement, sampler compatibility
+- [Parameters](#parameters) — Spectrum knobs + tuning tips
+- [Modulation guidance](#modulation-guidance) — AdaLN-side quality steering via `pooled_text_proj`
+- [SMC-CFG (α-adaptive sliding-mode CFG)](#smc-cfg-α-adaptive-sliding-mode-cfg) — velocity-space CFG combine modification
+- [DCW post-step bias correction](#dcw-post-step-bias-correction) — sampler-level SNR-t bias correction (Advanced node)
+
+The three feature blocks compose cleanly — they intervene at distinct points in the sampling loop (AdaLN → CFG combine → post-step x-space).
 
 ## How it works
 
@@ -63,9 +74,36 @@ The default ~12MB `pooled_text_proj` weight is auto-downloaded on first use from
 
 Per-block guidance schedules address quality drift on LoRAs whose distribution sits far from the positive-prompt axis (e.g. early blocks blowing out tonal DC into uniform color collapse). The default `step_i8_skip27` protects blocks 0–7 and the final compensation block 27 from the steering delta while keeping the base text projection uniform across all blocks. See [`docs/methods/mod-guidance.md`](https://github.com/sorryhyun/anima_lora/blob/main/docs/methods/mod-guidance.md) in anima_lora for the underlying rationale.
 
+## SMC-CFG (α-adaptive sliding-mode CFG)
+
+All three nodes expose an `adaptive_smc_alpha` knob (default `0.2`, set `0` to disable) that swaps the standard CFG combine for an **α-adaptive sliding-mode controller** ([Wang et al., arXiv:2603.03281](https://arxiv.org/abs/2603.03281), Anima α-adaptive form). The Advanced node additionally exposes `smc_cfg_lambda`. Auto-skipped when CFG = 1 (no cond/uncond residual to slide on).
+
+At each denoising step, with `e_t = v_cond − v_uncond`:
+
+```
+s_t        = (e_t − e_prev) + λ · e_prev      # sliding surface
+k_t        = α · mean(|e_t|)                  # adaptive switching gain
+Δe         = −k_t · sign(s_t)                 # bang-bang correction
+v̂_t        = v_uncond + w · (e_t + Δe)        # modified CFG combine
+```
+
+The α-adaptive gain replaces the paper's fixed `k = 0.1`, which was ~14× too large for Anima at CFG=4 (see `bench/smc_cfg/analysis_and_proposal.md` in anima_lora — at the paper's `k` the bang-bang exceeded `|e|` at 93% of steps, turning the controller into a noise source). `k_t = α · mean(|e_t|)` self-scales across model / CFG / σ / sample.
+
+Observable on Anima at CFG=4:
+
+- **Detail / fine-structure recovery** — fingers, eyes, small text get sharper. High-`|e|` directions (clear semantic moves) are barely perturbed in relative terms; low-`|e|` per-voxel CFG noise gets clamped or sign-flipped.
+- **Slight luminance drop** — outputs run a touch darker than vanilla CFG. The flow-matching DiT's `e` carries a small consistently-signed per-channel DC component (brightness/saturation lift of the conditional distribution) which is exactly the regime SMC clamps most aggressively. Lower `λ` attenuates the darkening while preserving most of the detail win.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `adaptive_smc_alpha` (all nodes) | 0.2 | α-adaptive switching gain. `0` disables (vanilla CFG combine). `0.2` puts the bang-bang correction at ~20% of the per-step mean residual magnitude. |
+| `smc_cfg_lambda` (advanced) | 5.0 | Sliding-manifold slope λ. Paper sweep `{3,4,5,6}`; 5 best. Higher λ tightens the `sign()` pattern's grip on small-`|e|` channels (more detail recovery, more darkening). |
+
+SMC-CFG operates in **velocity space** — it must, because σ varies per step and a denoised-space port would not be numerically equivalent. The ComfyUI hook converts via `v = (x_in − denoised) / σ`, runs the v-space combine, then converts back. One velocity-shaped buffer of state. No extra DiT forwards. Composes cleanly with mod guidance (AdaLN-side), DCW (post-step x-space), and Spectrum (cached steps still invoke the CFG combine). See [`docs/methods/smc_cfg.md`](https://github.com/sorryhyun/anima_lora/blob/main/docs/methods/smc_cfg.md) in anima_lora for the full derivation, the eps/tanh ablation, and composition table.
+
 ## DCW post-step bias correction
 
-DCW defaults to **off** on every node — turn it on per-workflow when you want the correction. The simple nodes (**KSampler (Spectrum)** and **KSampler (Spectrum + Mod Guidance)**) expose a single `dcw` on/off toggle — `on` runs auto mode (per-prompt λ̂ from the OnlineDCWCalibrator fusion head, auto-downloaded on first use); `off` disables correction. The **Advanced** node exposes the full `dcw_mode` / `dcw_lambda` / `dcw_band_mask` / `dcw_calibrator` widgets for manual mode + custom artifacts.
+DCW is exposed on the **Advanced** node only and defaults to **off** — turn it on per-workflow when you want the correction. The basic and mod-guidance nodes do not run DCW; switch to **KSampler (Spectrum + Mod Guidance Advanced)** to access the full `dcw_mode` / `dcw_lambda` / `dcw_band_mask` / `dcw_calibrator` widgets. `dcw_mode = auto` runs the OnlineDCWCalibrator fusion head (per-prompt λ̂, auto-downloaded on first use); `manual` uses the scalar `dcw_lambda × schedule(σ)`; `off` disables.
 
 DCW ([Yu et al., CVPR 2026](https://arxiv.org/abs/2604.16044)) is a sampler-level post-step correction for the SNR-t bias of flow-matching DiTs. Each step's `prev_sample` is mixed toward (or away from) the post-CFG `x0_pred`, optionally restricted to a single-level Haar subband of the differential:
 
