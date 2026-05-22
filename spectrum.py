@@ -69,6 +69,13 @@ def _spectrum_fast_forward(
     """
     if timestep.ndim == 1:
         timestep = timestep.unsqueeze(1)
+    # The forecaster works in its own dtype (bf16) and the Taylor blend can
+    # promote to fp32 via the captured feature, so the prediction dtype need
+    # not match the model. Pin it to final_layer's weight dtype before re-entry
+    # — otherwise fp16 models (e.g. `--fast fp16_accumulation`) raise
+    # "mat1 and mat2 ... float != c10::Half". t_emb follows via the cast below.
+    model_dtype = next(dit.final_layer.parameters()).dtype
+    predicted_feature = predicted_feature.to(model_dtype)
     # Replicate the model's two-step t_embedder call: Timesteps (sinusoidal,
     # always float32) -> cast to model dtype -> TimestepEmbedding (linear layers).
     # Calling t_embedder as a single Sequential skips the intermediate cast.
