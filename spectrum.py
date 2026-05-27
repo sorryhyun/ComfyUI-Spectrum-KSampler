@@ -1,8 +1,9 @@
 """Spectrum state management, fast-forward path, and shared sampling logic."""
 
+import copy
 import logging
 import math
-from typing import Optional, Dict
+from typing import Optional, Dict, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -107,6 +108,9 @@ class SpectrumState:
         m: int,
         lam: float,
         num_steps: int,
+        tail_actual_steps: int = 3,
+        history_size: int = 100,
+        verbose: bool = False,
     ):
         self.window_size = window_size
         self.flex_window = flex_window
@@ -115,6 +119,9 @@ class SpectrumState:
         self.m_param = m
         self.lam = lam
         self.num_steps = num_steps
+        self.tail_actual_steps = tail_actual_steps
+        self.history_size = history_size
+        self.verbose = verbose
 
         # Runtime
         self.step_idx = -1
@@ -151,13 +158,24 @@ class SpectrumState:
         self.forecasters = {}
         self.captured_feat = None
 
-    def should_cache(self) -> bool:
+    def _forecaster_ready(self, cou: int) -> bool:
+        forecaster = self.forecasters.get(cou)
+        if forecaster is None:
+            return False
+        return forecaster.cheb.t_buf.numel() >= max(2, self.m_param + 2)
+
+    def forecasters_ready(self, cond_or_uncond: Sequence[int]) -> bool:
+        return all(self._forecaster_ready(cou) for cou in cond_or_uncond)
+
+    def should_cache(self, cond_or_uncond: Optional[Sequence[int]] = None) -> bool:
         if not self.active:
             return False
         if self.step_idx < self.warmup_steps:
             return False
-        stop_at = self.num_steps - 3
+        stop_at = self.num_steps - self.tail_actual_steps
         if self.step_idx >= stop_at:
+            return False
+        if cond_or_uncond is not None and not self.forecasters_ready(cond_or_uncond):
             return False
         return (self.consec_cached + 1) % max(1, math.floor(self.curr_ws)) != 0
 
@@ -180,6 +198,252 @@ def _ensure_capture_hook(dit) -> None:
         return
     final_layer.register_forward_pre_hook(_capture_pre_hook)
     final_layer._spectrum_hook_installed = True
+
+
+def _require_dit_spectrum_components(model):
+    missing = []
+    base = getattr(model, "model", None)
+    dit = getattr(base, "diffusion_model", None)
+    model_sampling = getattr(base, "model_sampling", None)
+
+    if dit is None:
+        missing.append("model.model.diffusion_model")
+    else:
+        for name in (
+            "final_layer",
+            "t_embedder",
+            "t_embedding_norm",
+            "unpatchify",
+        ):
+            if not hasattr(dit, name):
+                missing.append(f"model.model.diffusion_model.{name}")
+    if model_sampling is None:
+        missing.append("model.model.model_sampling")
+
+    if missing:
+        raise RuntimeError(
+            "DiT Spectrum Patch requires a DiT-style model with these "
+            f"components: {', '.join(missing)}"
+        )
+    return dit, model_sampling
+
+
+def _clone_model_options(model):
+    try:
+        model.model_options = copy.deepcopy(model.model_options)
+    except Exception as e:
+        logger.warning(
+            "DiT Spectrum Patch: deepcopy(model_options) failed (%s); using a "
+            "shallow copy for wrapper isolation.",
+            e,
+        )
+        model.model_options = dict(model.model_options)
+
+
+def _normalize_cond_or_uncond(args, batch_size: int):
+    raw = args.get("cond_or_uncond", [0])
+    if raw is None:
+        raw = [0]
+    if torch.is_tensor(raw):
+        raw = raw.detach().cpu().tolist()
+    if not isinstance(raw, (list, tuple)):
+        raw = [raw]
+    cond_or_uncond = [int(cou) for cou in raw]
+    if len(cond_or_uncond) == 0:
+        cond_or_uncond = [0]
+    if batch_size % len(cond_or_uncond) != 0:
+        return cond_or_uncond, False
+    return cond_or_uncond, True
+
+
+def _advance_spectrum_state(state: SpectrumState, sigma_val: float) -> bool:
+    """Advance state once per new sampler sigma/timestep.
+
+    Returns True when a new sampling step was observed. If sigma rises, assume a
+    fresh sampler run started on the same patched MODEL and reset the forecast
+    buffers before counting the new step.
+    """
+    eps = 1e-8
+    if state.last_sigma is not None and sigma_val > state.last_sigma + eps:
+        if state.verbose:
+            logger.info(
+                "DiT Spectrum Patch: sigma increased %.6g -> %.6g; resetting state",
+                state.last_sigma,
+                sigma_val,
+            )
+        state.reset()
+
+    if state.last_sigma is not None and abs(sigma_val - state.last_sigma) <= eps:
+        return False
+
+    if state.step_idx >= 0:
+        if state.mode == "actual":
+            state.fwd_count += 1
+            if state.step_idx >= state.warmup_steps:
+                state.curr_ws = round(state.curr_ws + state.flex_window, 3)
+            state.consec_cached = 0
+        else:
+            state.consec_cached += 1
+
+    state.step_idx += 1
+    state.steps_seen += 1
+    state.last_sigma = sigma_val
+    return True
+
+
+def apply_dit_spectrum_patch(
+    model,
+    steps: int = 30,
+    window_size: float = 2.0,
+    flex_window: float = 0.25,
+    warmup_steps: int = 6,
+    tail_actual_steps: int = 3,
+    blend_w: float = 0.3,
+    cheby_degree: int = 3,
+    ridge_lambda: float = 0.1,
+    history_size: int = 100,
+    enabled: bool = True,
+    verbose: bool = False,
+):
+    """Return a MODEL clone patched with DiT Spectrum feature forecasting only."""
+    if not enabled:
+        return model
+    if history_size < cheby_degree + 2:
+        raise RuntimeError(
+            "DiT Spectrum Patch requires history_size >= cheby_degree + 2 "
+            f"(got history_size={history_size}, cheby_degree={cheby_degree})."
+        )
+
+    m = model.clone()
+    _clone_model_options(m)
+    dit, model_sampling = _require_dit_spectrum_components(m)
+
+    state = SpectrumState(
+        window_size=window_size,
+        flex_window=flex_window,
+        warmup_steps=warmup_steps,
+        w=blend_w,
+        m=cheby_degree,
+        lam=ridge_lambda,
+        num_steps=steps,
+        tail_actual_steps=tail_actual_steps,
+        history_size=history_size,
+        verbose=verbose,
+    )
+
+    _ensure_capture_hook(dit)
+    old_wrapper = m.model_options.get("model_function_wrapper")
+
+    def spectrum_model_patch_wrapper(apply_model, args):
+        input_x = args["input"]
+        timestep = args["timestep"]
+        c = args["c"]
+
+        # The hook is a singleton on the shared final_layer. Re-bind on every
+        # call so a reused diffusion_model never writes into a stale patch state.
+        dit.final_layer._spectrum_state = state
+
+        cond_or_uncond, valid_chunks = _normalize_cond_or_uncond(
+            args, input_x.shape[0]
+        )
+        sigma_val = timestep.flatten()[0].item()
+        new_step = _advance_spectrum_state(state, sigma_val)
+        if new_step:
+            state.mode = (
+                "cached" if valid_chunks and state.should_cache(cond_or_uncond)
+                else "actual"
+            )
+            if state.verbose:
+                logger.info(
+                    "DiT Spectrum Patch: step %d/%d sigma=%.6g mode=%s",
+                    state.step_idx + 1,
+                    state.num_steps,
+                    sigma_val,
+                    state.mode,
+                )
+
+        if state.mode == "cached" and valid_chunks and state.has_forecasters(
+            cond_or_uncond
+        ):
+            predictions = []
+            for cou in cond_or_uncond:
+                predictions.append(state.forecasters[cou].predict(float(state.step_idx)))
+
+            batched_feat = torch.cat(predictions, dim=0)
+            t_internal = model_sampling.timestep(timestep).to(batched_feat.dtype)
+            noise_pred = _spectrum_fast_forward(dit, t_internal, batched_feat)
+            return model_sampling.calculate_denoised(
+                timestep, noise_pred.float(), input_x
+            )
+
+        state.mode = "actual"
+        state.captured_feat = None
+
+        if old_wrapper is not None:
+            result = old_wrapper(apply_model, args)
+        else:
+            result = apply_model(input_x, timestep, **c)
+
+        feat = state.captured_feat
+        if feat is not None and valid_chunks:
+            batch_chunks = len(cond_or_uncond)
+            feat_chunks = feat.chunk(batch_chunks, dim=0)
+            if len(feat_chunks) != batch_chunks:
+                if state.verbose:
+                    logger.warning(
+                        "DiT Spectrum Patch: feature batch %d cannot be split "
+                        "into %d cond/uncond chunks; skipping forecast update",
+                        feat.shape[0],
+                        batch_chunks,
+                    )
+                return result
+
+            try:
+                for idx, cou in enumerate(cond_or_uncond):
+                    if cou not in state.forecasters:
+                        state.forecasters[cou] = SpectrumPredictor(
+                            state.m_param,
+                            state.lam,
+                            state.w,
+                            feat.device,
+                            feat_chunks[idx].shape,
+                            state.num_steps,
+                            K=state.history_size,
+                        )
+                    state.forecasters[cou].update(
+                        float(state.step_idx), feat_chunks[idx]
+                    )
+            except AssertionError:
+                if state.verbose:
+                    logger.info(
+                        "DiT Spectrum Patch: feature shape changed; resetting state"
+                    )
+                state.forecasters = {}
+                for idx, cou in enumerate(cond_or_uncond):
+                    state.forecasters[cou] = SpectrumPredictor(
+                        state.m_param,
+                        state.lam,
+                        state.w,
+                        feat.device,
+                        feat_chunks[idx].shape,
+                        state.num_steps,
+                        K=state.history_size,
+                    )
+                    state.forecasters[cou].update(
+                        float(state.step_idx), feat_chunks[idx]
+                    )
+        elif state.verbose and not valid_chunks:
+            logger.warning(
+                "DiT Spectrum Patch: cond_or_uncond=%s does not divide batch=%d; "
+                "running actual forward without forecast update",
+                cond_or_uncond,
+                input_x.shape[0],
+            )
+
+        return result
+
+    m.set_model_unet_function_wrapper(spectrum_model_patch_wrapper)
+    return m
 
 
 def spectrum_sample(

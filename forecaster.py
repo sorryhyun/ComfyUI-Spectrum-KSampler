@@ -124,9 +124,10 @@ class SpectrumPredictor:
         device: torch.device,
         feature_shape,
         total_steps: int = 30,
+        K: int = 100,
     ):
         self.cheb = ChebyshevForecaster(
-            M=m, K=100, lam=lam, device=device, total_steps=total_steps
+            M=m, K=K, lam=lam, device=device, total_steps=total_steps
         )
         self.w = w
 

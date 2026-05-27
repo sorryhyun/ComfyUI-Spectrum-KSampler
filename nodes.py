@@ -9,7 +9,7 @@ import comfy.utils
 import folder_paths
 
 from .mod_guidance import AUTO_ADAPTER_SENTINEL, setup_mod_guidance
-from .spectrum import spectrum_sample
+from .spectrum import apply_dit_spectrum_patch, spectrum_sample
 
 logger = logging.getLogger(__name__)
 
@@ -755,6 +755,158 @@ class AnimaModGuidance:
         return (m,)
 
 
+class DiTSpectrumPatch:
+    """Standalone DiT Spectrum MODEL patcher.
+
+    Applies only the original Spectrum final_layer-pre-feature forecasting path
+    to a MODEL clone. The returned MODEL can be wired into ComfyUI's built-in
+    KSampler, KSampler Advanced, Custom Sampler, or other sampler nodes.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL", {"tooltip": "DiT MODEL to patch with Spectrum."}),
+                "steps": (
+                    "INT",
+                    {
+                        "default": 30,
+                        "min": 1,
+                        "max": 10000,
+                        "tooltip": "Must match the downstream sampler's steps.",
+                    },
+                ),
+                "window_size": (
+                    "FLOAT",
+                    {
+                        "default": 2.0,
+                        "min": 1.0,
+                        "max": 10.0,
+                        "step": 0.25,
+                        "tooltip": "Initial caching window; 1.0 disables cached steps.",
+                    },
+                ),
+                "flex_window": (
+                    "FLOAT",
+                    {
+                        "default": 0.25,
+                        "min": 0.0,
+                        "max": 2.0,
+                        "step": 0.05,
+                        "tooltip": "Window growth after each actual forward.",
+                    },
+                ),
+                "warmup_steps": (
+                    "INT",
+                    {
+                        "default": 6,
+                        "min": 0,
+                        "max": 10000,
+                        "tooltip": "Initial steps forced to actual DiT forwards.",
+                    },
+                ),
+                "tail_actual_steps": (
+                    "INT",
+                    {
+                        "default": 3,
+                        "min": 0,
+                        "max": 10000,
+                        "tooltip": "Final steps forced to actual DiT forwards.",
+                    },
+                ),
+                "blend_w": (
+                    "FLOAT",
+                    {
+                        "default": 0.3,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.05,
+                        "tooltip": "Chebyshev/Taylor blend weight; 1.0 is pure Chebyshev.",
+                    },
+                ),
+                "cheby_degree": (
+                    "INT",
+                    {
+                        "default": 3,
+                        "min": 1,
+                        "max": 10,
+                        "tooltip": "Chebyshev polynomial degree.",
+                    },
+                ),
+                "ridge_lambda": (
+                    "FLOAT",
+                    {
+                        "default": 0.1,
+                        "min": 0.001,
+                        "max": 10.0,
+                        "step": 0.01,
+                        "tooltip": "Ridge regression regularization strength.",
+                    },
+                ),
+                "history_size": (
+                    "INT",
+                    {
+                        "default": 100,
+                        "min": 5,
+                        "max": 10000,
+                        "tooltip": "Forecaster buffer size.",
+                    },
+                ),
+                "enabled": ("BOOLEAN", {"default": True}),
+                "verbose": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": "Log actual/cached step decisions.",
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    FUNCTION = "patch"
+    CATEGORY = "model_patches"
+    DESCRIPTION = (
+        "Standalone DiT Spectrum model patch. Forecasts the DiT feature before "
+        "final_layer and re-runs only final_layer/unpatchify on cached steps. "
+        "Wire before a normal KSampler, KSampler Advanced, or Custom Sampler. "
+        "Does not perform sampling and does not include mod guidance, DCW, "
+        "SMC-CFG, or SPEED/SPD."
+    )
+
+    def patch(
+        self,
+        model,
+        steps=30,
+        window_size=2.0,
+        flex_window=0.25,
+        warmup_steps=6,
+        tail_actual_steps=3,
+        blend_w=0.3,
+        cheby_degree=3,
+        ridge_lambda=0.1,
+        history_size=100,
+        enabled=True,
+        verbose=False,
+    ):
+        patched = apply_dit_spectrum_patch(
+            model,
+            steps=steps,
+            window_size=window_size,
+            flex_window=flex_window,
+            warmup_steps=warmup_steps,
+            tail_actual_steps=tail_actual_steps,
+            blend_w=blend_w,
+            cheby_degree=cheby_degree,
+            ridge_lambda=ridge_lambda,
+            history_size=history_size,
+            enabled=enabled,
+            verbose=verbose,
+        )
+        return (patched,)
+
+
 class SpectrumSPDKSampler:
     """KSampler (Spectrum + SPD) — the SPEED sampler.
 
@@ -957,6 +1109,7 @@ NODE_CLASS_MAPPINGS = {
     "SpectrumSPDKSampler": SpectrumSPDKSampler,
     "SpectrumSPDLoRAKSampler": SpectrumSPDLoRAKSampler,
     "AnimaModGuidance": AnimaModGuidance,
+    "DiTSpectrumPatch": DiTSpectrumPatch,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -966,4 +1119,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SpectrumSPDKSampler": "KSampler (Spectrum + SPD / SPEED)",
     "SpectrumSPDLoRAKSampler": "KSampler (SPD LoRA / auto-schedule)",
     "AnimaModGuidance": "Anima Mod Guidance (model patch)",
+    "DiTSpectrumPatch": "DiT Spectrum Patch",
 }

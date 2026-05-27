@@ -1,6 +1,6 @@
 # Spectrum for ComfyUI
 
-Training-free diffusion sampling acceleration via **Chebyshev polynomial feature forecasting** ([Han et al., CVPR 2026](https://arxiv.org/abs/2603.01623)). Drop-in KSampler replacement that skips transformer blocks on predicted steps for ~2-3x speedup.
+Training-free diffusion sampling acceleration via **Chebyshev polynomial feature forecasting** ([Han et al., CVPR 2026](https://arxiv.org/abs/2603.01623)). Drop-in KSampler replacement and standalone MODEL patcher that skip transformer blocks on predicted steps for ~2-3x speedup.
 
 Tuned for the [Anima](https://github.com/sorryhyun/anima_lora) DiT — its modulation guidance, DCW calibrator artifacts, and per-block guidance presets are derived from the Anima training/inference pipeline. See the [anima_lora repo](https://github.com/sorryhyun/anima_lora) for the underlying methods documentation (`docs/methods/dcw.md`, `docs/methods/mod-guidance.md`, `docs/methods/smc_cfg.md`, `docs/methods/spectrum.md`).
 
@@ -8,6 +8,7 @@ Tuned for the [Anima](https://github.com/sorryhyun/anima_lora) DiT — its modul
 
 - [How it works](#how-it-works) — Chebyshev forecasting, adaptive window schedule
 - [Usage](#usage) — node placement, sampler compatibility
+  - [Standalone MODEL patcher](#standalone-model-patcher) — wire Spectrum before stock samplers
 - [Parameters](#parameters) — Spectrum knobs + tuning tips
 - [Modulation guidance](#modulation-guidance) — AdaLN-side quality steering via `pooled_text_proj`
 - [SMC-CFG (α-adaptive sliding-mode CFG)](#smc-cfg-α-adaptive-sliding-mode-cfg) — velocity-space CFG combine modification
@@ -38,6 +39,18 @@ Place the **KSampler (Spectrum)** node where you'd normally use a KSampler. It h
 
 Works with any ComfyUI sampler (Euler, DPM, er_sde, etc.) because caching is handled transparently inside a model function wrapper. Chains with other model wrappers (Flex Attention, Flash Attention 4, etc.).
 
+### Standalone MODEL patcher
+
+The **DiT Spectrum Patch** node exposes Spectrum as a `MODEL → MODEL` patcher instead of a sampler. Wire it before ComfyUI's normal sampler nodes when you want to keep the stock sampling workflow:
+
+```
+CheckpointLoader / model loader → DiT Spectrum Patch → KSampler / KSampler Advanced / Custom Sampler
+```
+
+Set `steps` on **DiT Spectrum Patch** to the same value as the downstream sampler. The patcher keeps the original Spectrum path: actual steps capture the DiT feature immediately before `final_layer`; cached steps predict that feature and run only `final_layer` + `unpatchify`. It does **not** add modulation guidance, DCW, SMC-CFG, SPEED/SPD, noise generation, latent padding, or a custom sampling loop.
+
+Use `enabled = false` to pass the input model through unchanged. Non-DiT models fail with a clear error rather than silently producing invalid output.
+
 ## Parameters
 
 | Parameter | Default | Description |
@@ -48,6 +61,16 @@ Works with any ComfyUI sampler (Euler, DPM, er_sde, etc.) because caching is han
 | `blend_w` | 0.3 | Chebyshev/Taylor blend weight (1.0 = pure Chebyshev) |
 | `cheby_degree` | 3 | Number of Chebyshev basis functions |
 | `ridge_lambda` | 0.1 | Ridge regression regularization strength |
+
+Additional **DiT Spectrum Patch** parameters:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `steps` | 30 | Must match the downstream sampler's step count |
+| `tail_actual_steps` | 3 | Final steps that always run actual DiT forwards |
+| `history_size` | 100 | Forecaster buffer size (same default as the integrated samplers) |
+| `enabled` | true | `false` returns the input MODEL unchanged |
+| `verbose` | false | Logs actual/cached step decisions |
 
 ### Tuning tips
 
