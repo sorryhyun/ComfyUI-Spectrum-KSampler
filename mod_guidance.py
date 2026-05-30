@@ -30,10 +30,10 @@ MOD_DIFFUSION_WRAPPER_KEY = "spectrum_mod_guidance"  # legacy key for cleanup
 MOD_STATE_KEY = "spectrum_mod_guidance_state"
 
 AUTO_ADAPTER_SENTINEL = "(auto-download default)"
-DEFAULT_ADAPTER_FILENAME = "pooled_text_proj-0524.safetensors"
+DEFAULT_ADAPTER_FILENAME = "pooled_text_proj-0530.safetensors"
 DEFAULT_ADAPTER_URL = (
     "https://github.com/sorryhyun/ComfyUI-Spectrum-KSampler/releases/download/"
-    "0524/pooled_text_proj-0524.safetensors"
+    "0530/pooled_text_proj-0530.safetensors"
 )
 DEFAULT_ADAPTER_SUBDIR = "anima_mod_guidance"
 
