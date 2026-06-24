@@ -20,7 +20,7 @@ try:
 except Exception:  # older ComfyUI without the execution-context contextvar
     get_executing_context = None
 
-from .forecaster import SpectrumPredictor
+from networks.spectrum_forecast import SpectrumPredictor
 from .spectrum_sea import l1rel, sea_filter
 from .dcw import install_dcw
 from .dcw_calibrator import setup_dcw_calibrator
@@ -58,7 +58,12 @@ def _pad_latent_to_patch_multiple(t: torch.Tensor, patch: int = _PATCH_MULTIPLE)
             "Spectrum: latent H,W=%d,%d is not divisible by %d "
             "(Anima DiT patch_size). Padding to %d,%d and cropping the output "
             "back. For exact framing, use pixel sizes that are multiples of %d.",
-            H, W, patch, H + pad_h, W + pad_w, patch * 8,
+            H,
+            W,
+            patch,
+            H + pad_h,
+            W + pad_w,
+            patch * 8,
         )
         _ODD_LATENT_WARNED = True
     # 5-D video-DiT latents (B, C, T, H, W) need a size-6 pad tuple under
@@ -529,9 +534,7 @@ def apply_dit_spectrum_patch(
         _ensure_capture_hook(live_dit)
         live_dit.final_layer._spectrum_state = state
 
-        cond_or_uncond, valid_chunks = _normalize_cond_or_uncond(
-            args, input_x.shape[0]
-        )
+        cond_or_uncond, valid_chunks = _normalize_cond_or_uncond(args, input_x.shape[0])
         sigma_val = timestep.flatten()[0].item()
         new_step = _advance_spectrum_state(state, sigma_val)
         if state.patch_consumed:
@@ -540,7 +543,8 @@ def apply_dit_spectrum_patch(
             )
         if new_step:
             state.mode = (
-                "cached" if valid_chunks and state.should_cache(cond_or_uncond)
+                "cached"
+                if valid_chunks and state.should_cache(cond_or_uncond)
                 else "actual"
             )
             if state.verbose:
@@ -552,12 +556,16 @@ def apply_dit_spectrum_patch(
                     state.mode,
                 )
 
-        if state.mode == "cached" and valid_chunks and state.has_forecasters(
-            cond_or_uncond
+        if (
+            state.mode == "cached"
+            and valid_chunks
+            and state.has_forecasters(cond_or_uncond)
         ):
             predictions = []
             for cou in cond_or_uncond:
-                predictions.append(state.forecasters[cou].predict(float(state.step_idx)))
+                predictions.append(
+                    state.forecasters[cou].predict(float(state.step_idx))
+                )
 
             batched_feat = torch.cat(predictions, dim=0)
             t_internal = live_model_sampling.timestep(timestep).to(batched_feat.dtype)
@@ -775,7 +783,9 @@ def spectrum_sample(
     fsg = None
     fsg_steps: frozenset = frozenset()
     want_cfgpp = cfgpp_lambda and cfgpp_lambda > 0.0
-    spd_will_own_loop = bool(spd_stages) or (0.0 < spd_scale < 1.0 and 0.0 < spd_sigma < 1.0)
+    spd_will_own_loop = bool(spd_stages) or (
+        0.0 < spd_scale < 1.0 and 0.0 < spd_sigma < 1.0
+    )
     if (want_cfgpp or fsg_enabled) and not do_cfg:
         logger.warning("CFG++/FSG need CFG (cfg != 1.0); ignoring.")
         want_cfgpp = fsg_enabled = False
@@ -816,7 +826,11 @@ def spectrum_sample(
             logger.info(
                 "FSG active: band=[%.2f, %.2f], K=%d, Δσ=%.3g, %d in-band steps "
                 "(+~%d fwd).",
-                fsg.band[0], fsg.band[1], fsg.k, fsg.d_sigma, len(fsg_steps),
+                fsg.band[0],
+                fsg.band[1],
+                fsg.k,
+                fsg.d_sigma,
+                len(fsg_steps),
                 3 * fsg.k * len(fsg_steps),
             )
 
@@ -870,7 +884,8 @@ def spectrum_sample(
             "Spectrum SEA: refresh_ratio=%.3f, δ=%s (%s)",
             refresh_ratio,
             f"{sea_delta:.4g}" if sea_delta is not None else "uncalibrated",
-            "cached → SEA trigger" if sea_delta is not None
+            "cached → SEA trigger"
+            if sea_delta is not None
             else "calibrating this run (window schedule, full compute)",
         )
 
@@ -1083,7 +1098,12 @@ def spectrum_sample(
     # SEA auto-δ: this generate ran the window schedule while recording the SEA
     # distance trace — solve the δ that hits the target refresh fraction and cache
     # it so subsequent generates at this config use the SEA trigger.
-    if schedule == "sea" and sea_delta is None and sea_key is not None and state.sea_dists:
+    if (
+        schedule == "sea"
+        and sea_delta is None
+        and sea_key is not None
+        and state.sea_dists
+    ):
         from . import spectrum_sea as _sea
 
         new_delta = _sea.solve_delta_for_refresh_ratio(state.sea_dists, refresh_ratio)

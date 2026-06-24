@@ -17,10 +17,14 @@ import weakref
 from typing import List, Optional
 
 import torch
-import torch.nn.functional as F
 
 import comfy.patcher_extension
 import folder_paths
+
+from library.inference.corrections.mod_guidance_core import (
+    build_block_schedule,
+    project_pooled,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -192,37 +196,40 @@ def _get_adapter_typed(path: str, device, dtype):
 
 
 def _project(pooled, adapter_state):
-    """Project pooled embedding through the 2-layer MLP (Linear -> SiLU -> Linear)."""
-    x = F.linear(pooled, adapter_state["0.weight"], adapter_state["0.bias"])
-    x = F.silu(x)
-    x = F.linear(x, adapter_state["2.weight"], adapter_state["2.bias"])
-    return x
+    """σ-flat projection through the 2-layer MLP (Linear -> SiLU -> Linear).
+
+    Thin seam over the shared ``project_pooled`` core — the node loads the head as
+    a raw safetensors state dict (PROJ_KEYS), so it unpacks the weights here.
+    """
+    return project_pooled(
+        pooled,
+        adapter_state["0.weight"],
+        adapter_state["0.bias"],
+        adapter_state["2.weight"],
+        adapter_state["2.bias"],
+    )
 
 
 def _project_film(pooled, adapter_state, t_emb, out_dtype=None):
-    """σ-conditioned projection. With σ-FiLM weights and a (B, C) normed time
-    embedding ``t_emb``, FiLM-modulate the hidden between the two linears —
-    bit-for-bit the same op as ``_pooled_text_delta`` in
-    ``library/anima/models.py`` (h*(1+scale)+shift). Without either, this is
-    exactly ``_project`` (σ-flat).
-
-    Computes in ``adapter_state``'s dtype — pass an fp32 adapter_state to run the
-    (tiny) head at full precision, matching its fp32-trained weights — then casts
-    the result to ``out_dtype`` (the block compute dtype) so the compiled blocks
-    still receive their native dtype. Each linear's input is cast to its weight
-    dtype anyway, since `t_emb` arrives in the t_embedder's dtype (mul/add below
-    type-promote, so only the matmuls need matching dtypes)."""
-    w0 = adapter_state["0.weight"]
-    x = F.linear(pooled.to(w0.dtype), w0, adapter_state["0.bias"])
-    if t_emb is not None and "sigma_film.weight" in adapter_state:
-        fw = adapter_state["sigma_film.weight"]
-        film = F.linear(t_emb.to(fw.dtype), fw, adapter_state["sigma_film.bias"])
-        scale, shift = film.chunk(2, dim=-1)
-        x = x * (1.0 + scale) + shift
-    x = F.silu(x)
-    w2 = adapter_state["2.weight"]
-    out = F.linear(x.to(w2.dtype), w2, adapter_state["2.bias"])
-    return out if out_dtype is None else out.to(out_dtype)
+    """σ-conditioned projection. With σ-FiLM weights (sigma_film.*) and a (B, C)
+    normed time embedding ``t_emb``, FiLM-modulate the hidden between the two
+    linears; without either, falls back to the σ-flat head. Delegates the math to
+    the shared ``project_pooled`` core (single source of truth with
+    ``library/anima/models.py::_pooled_text_delta``); this seam only unpacks the
+    raw state dict and routes ``out_dtype`` (run the fp32 head, cast back to the
+    block compute dtype)."""
+    has_film = "sigma_film.weight" in adapter_state
+    return project_pooled(
+        pooled,
+        adapter_state["0.weight"],
+        adapter_state["0.bias"],
+        adapter_state["2.weight"],
+        adapter_state["2.bias"],
+        film_w=adapter_state["sigma_film.weight"] if has_film else None,
+        film_b=adapter_state.get("sigma_film.bias") if has_film else None,
+        t_emb=t_emb,
+        out_dtype=out_dtype,
+    )
 
 
 def _compute_t_emb(dit, t):
@@ -429,19 +436,15 @@ class ModGuidanceState:
         )
 
     def _build_schedule(self):
-        num_blocks = len(self.dit.blocks)
-        end = num_blocks if self.end_layer < 0 else min(self.end_layer, num_blocks)
-        start = max(0, min(self.start_layer, end))
-        sched = [0.0] * num_blocks
-        w = float(self.w)
-        for i in range(start, end):
-            sched[i] = w
-        if self.taper > 0 and end > start:
-            taper_start = max(start, end - self.taper)
-            taper_w = w * float(self.taper_scale)
-            for i in range(taper_start, end):
-                sched[i] = taper_w
-        self.per_block_schedule = sched
+        # Shared per-block w(ℓ) profile (single source with the library).
+        self.per_block_schedule = build_block_schedule(
+            len(self.dit.blocks),
+            w=self.w,
+            start_layer=self.start_layer,
+            end_layer=self.end_layer,
+            taper=self.taper,
+            taper_scale=self.taper_scale,
+        )
 
 
 def _t_emb_forward_hook(module, input, output):
