@@ -1,0 +1,476 @@
+{
+  "SpectrumKSampler": {
+    "display_name": "KSampler (Spectrum)",
+    "description": "標準 KSampler の代替として使える Spectrum 加速 sampler です。Chebyshev feature forecasting、SEA skip scheduling、optional mod guidance、SMC-CFG を 1 つのノードで扱います。",
+    "inputs": {
+      "model": {
+        "tooltip": "denoising に使う MODEL です。"
+      },
+      "seed": {
+        "tooltip": "noise 生成に使う seed です。"
+      },
+      "steps": {
+        "tooltip": "sampling step 数です。"
+      },
+      "cfg": {
+        "tooltip": "Classifier-Free Guidance scale です。"
+      },
+      "sampler_name": {
+        "tooltip": "使用する sampler algorithm です。"
+      },
+      "scheduler": {
+        "tooltip": "noise sigma schedule です。"
+      },
+      "positive": {
+        "tooltip": "positive conditioning です。"
+      },
+      "negative": {
+        "tooltip": "negative conditioning です。"
+      },
+      "latent_image": {
+        "tooltip": "sampling を開始する latent です。"
+      },
+      "denoise": {
+        "tooltip": "denoise 強度です。1.0 は full denoise です。"
+      },
+      "quality_tags": {
+        "tooltip": "mod guidance が品質方向へ steer するための positive quality tag です。"
+      },
+      "quality_neg": {
+        "tooltip": "quality steering axis の negative baseline です。空なら CFG negative を再利用します。"
+      },
+      "mod_w_profile": {
+        "tooltip": "per-block modulation guidance preset です。off は mod guidance を無効化します。"
+      },
+      "refresh_ratio": {
+        "tooltip": "SEA skip scheduling の dial です。-1 は window、0 は auto、正の値は明示的な refresh ratio です。"
+      },
+      "adaptive_smc_alpha": {
+        "tooltip": "SMC-CFG alpha gain です。0 なら通常の CFG combine を使います。"
+      },
+      "fsg": {
+        "tooltip": "validated CFG++/FSG stack を有効化します。CFG が 1 でない場合に使い、SMC-CFG とは同時に使いません。"
+      },
+      "clip": {
+        "tooltip": "quality tag を encode する CLIP です。mod guidance を使う場合に接続します。"
+      }
+    }
+  },
+  "SpectrumKSamplerAdvanced": {
+    "display_name": "KSampler (Spectrum + Mod Guidance Advanced)",
+    "description": "Spectrum 加速 sampler の advanced 版です。mod guidance、forecasting、DCW、FSG、SMC-CFG の詳細値を直接調整します。",
+    "inputs": {
+      "model": {
+        "tooltip": "denoising に使う MODEL です。"
+      },
+      "clip": {
+        "tooltip": "quality tag と DCW auto calibrator 入力を encode する CLIP です。"
+      },
+      "seed": {
+        "tooltip": "noise 生成に使う seed です。"
+      },
+      "steps": {
+        "tooltip": "sampling step 数です。"
+      },
+      "cfg": {
+        "tooltip": "Classifier-Free Guidance scale です。"
+      },
+      "sampler_name": {
+        "tooltip": "使用する sampler algorithm です。"
+      },
+      "scheduler": {
+        "tooltip": "noise sigma schedule です。"
+      },
+      "positive": {
+        "tooltip": "positive conditioning です。"
+      },
+      "negative": {
+        "tooltip": "negative conditioning です。"
+      },
+      "latent_image": {
+        "tooltip": "sampling を開始する latent です。"
+      },
+      "denoise": {
+        "tooltip": "denoise 強度です。1.0 は full denoise です。"
+      },
+      "adapter": {
+        "tooltip": "mod guidance 用 pooled_text_proj adapter です。auto 項目は初回実行時に既定 weight を取得します。"
+      },
+      "quality_tags": {
+        "tooltip": "mod guidance が品質方向へ steer するための positive quality tag です。"
+      },
+      "quality_neg": {
+        "tooltip": "quality steering axis の negative baseline です。空なら CFG negative を再利用します。"
+      },
+      "mod_w": {
+        "tooltip": "per-block modulation guidance の peak strength です。"
+      },
+      "mod_start_layer": {
+        "tooltip": "steering delta を適用し始める block index です。"
+      },
+      "mod_end_layer": {
+        "tooltip": "steering delta 適用を止める exclusive end block index です。-1 は残りすべての block です。"
+      },
+      "mod_taper": {
+        "tooltip": "最後の slot に taper_scale を適用する数です。"
+      },
+      "mod_taper_scale": {
+        "tooltip": "taper 区間に掛ける倍率です。"
+      },
+      "mod_final_w": {
+        "tooltip": "final layer に適用する guidance strength です。既定 0.0 は output head を変えません。"
+      },
+      "window_size": {
+        "tooltip": "初期 Spectrum caching window です。"
+      },
+      "flex_window": {
+        "tooltip": "actual forward 後に window サイズを増やす値です。"
+      },
+      "warmup_steps": {
+        "tooltip": "最初に必ず actual forward を実行する step 数です。"
+      },
+      "blend_w": {
+        "tooltip": "Chebyshev 予測と Taylor 補間の blend 比率です。1.0 は純粋な Chebyshev です。"
+      },
+      "cheby_degree": {
+        "tooltip": "Chebyshev basis の数です。"
+      },
+      "ridge_lambda": {
+        "tooltip": "ridge regression の正則化強度です。"
+      },
+      "dcw_mode": {
+        "tooltip": "DCW correction mode です。off/manual/auto から選びます。"
+      },
+      "dcw_lambda": {
+        "tooltip": "manual DCW post-step bias correction strength です。"
+      },
+      "dcw_band_mask": {
+        "tooltip": "DCW correction を適用する Haar subband 範囲です。"
+      },
+      "dcw_calibrator": {
+        "tooltip": "DCW auto mode で使う fusion-head safetensors artifact です。"
+      },
+      "cfgpp_lambda": {
+        "tooltip": "CFG++ substrate strength です。0 なら通常 CFG です。"
+      },
+      "fsg": {
+        "tooltip": "Foresight Guidance を有効化します。in-band step ごとに追加 forward が必要です。"
+      },
+      "fsg_band_lo": {
+        "tooltip": "FSG が動作する sigma band の下限です。"
+      },
+      "fsg_band_hi": {
+        "tooltip": "FSG が動作する sigma band の上限です。"
+      },
+      "fsg_k": {
+        "tooltip": "in-band step ごとに行う FSG fixed-point iteration 数です。"
+      },
+      "fsg_d_sigma": {
+        "tooltip": "FSG forward-backward stride delta sigma です。"
+      },
+      "fsg_gamma": {
+        "tooltip": "FSG calibration guidance gamma です。0 なら CFG scale を使います。"
+      },
+      "adaptive_smc_alpha": {
+        "tooltip": "SMC-CFG alpha gain です。0 なら通常の CFG combine を使います。"
+      },
+      "smc_cfg_lambda": {
+        "tooltip": "SMC-CFG sliding-manifold slope lambda です。"
+      }
+    }
+  },
+  "SpectrumSPDKSampler": {
+    "display_name": "KSampler (Spectrum + SPD / SPEED)",
+    "description": "Spectrum と SPD/SPEED を組み合わせた sampler です。low-res prefix 後に full-res へ展開し、Spectrum が tail を予測します。",
+    "inputs": {
+      "model": {
+        "tooltip": "denoising に使う MODEL です。"
+      },
+      "seed": {
+        "tooltip": "noise 生成に使う seed です。"
+      },
+      "steps": {
+        "tooltip": "sampling step 数です。"
+      },
+      "cfg": {
+        "tooltip": "Classifier-Free Guidance scale です。"
+      },
+      "sampler_name": {
+        "tooltip": "使用する sampler algorithm です。"
+      },
+      "scheduler": {
+        "tooltip": "noise sigma schedule です。"
+      },
+      "positive": {
+        "tooltip": "positive conditioning です。"
+      },
+      "negative": {
+        "tooltip": "negative conditioning です。"
+      },
+      "latent_image": {
+        "tooltip": "sampling を開始する latent です。"
+      },
+      "denoise": {
+        "tooltip": "denoise 強度です。1.0 は full denoise です。"
+      },
+      "split_mode": {
+        "tooltip": "SPD resolution schedule mode です。現在は single handoff を使います。"
+      },
+      "spd_scale": {
+        "tooltip": "low-res phase で使う latent resolution scale です。"
+      },
+      "spd_sigma": {
+        "tooltip": "low-res から full-res へ切り替える sigma 値です。"
+      },
+      "adaptive_smc_alpha": {
+        "tooltip": "SMC-CFG alpha gain です。0 なら通常の CFG combine を使います。"
+      }
+    }
+  },
+  "SpectrumSPDLoRAKSampler": {
+    "display_name": "KSampler (SPD LoRA / auto-schedule)",
+    "description": "SPD-trained LoRA を MODEL に適用し、adapter metadata から SPEED schedule を自動で読み取って sampling します。",
+    "inputs": {
+      "model": {
+        "tooltip": "LoRA を適用して denoising に使う MODEL です。"
+      },
+      "seed": {
+        "tooltip": "noise 生成に使う seed です。"
+      },
+      "steps": {
+        "tooltip": "sampling step 数です。"
+      },
+      "cfg": {
+        "tooltip": "Classifier-Free Guidance scale です。"
+      },
+      "sampler_name": {
+        "tooltip": "使用する sampler algorithm です。"
+      },
+      "scheduler": {
+        "tooltip": "noise sigma schedule です。"
+      },
+      "positive": {
+        "tooltip": "positive conditioning です。"
+      },
+      "negative": {
+        "tooltip": "negative conditioning です。"
+      },
+      "latent_image": {
+        "tooltip": "sampling を開始する latent です。"
+      },
+      "denoise": {
+        "tooltip": "denoise 強度です。1.0 は full denoise です。"
+      },
+      "lora_name": {
+        "tooltip": "SPD schedule metadata を含む LoRA です。metadata がない場合は既定 handoff 値へ fallback します。"
+      },
+      "lora_strength": {
+        "tooltip": "MODEL に適用する LoRA strength です。"
+      },
+      "adaptive_smc_alpha": {
+        "tooltip": "SMC-CFG alpha gain です。0 なら通常の CFG combine を使います。"
+      }
+    }
+  },
+  "AnimaModGuidance": {
+    "display_name": "Anima Mod Guidance (model patch)",
+    "description": "modulation guidance を standalone MODEL patcher として適用します。出力 MODEL は通常 sampler、Spectrum、SPEED の前に接続できます。",
+    "inputs": {
+      "model": {
+        "tooltip": "mod guidance を適用する MODEL です。"
+      },
+      "clip": {
+        "tooltip": "quality tag を encode する CLIP です。"
+      },
+      "quality_tags": {
+        "tooltip": "generation を steer する positive quality tag です。"
+      },
+      "quality_neg": {
+        "tooltip": "quality steering axis の negative baseline です。空なら CFG negative を再利用します。"
+      },
+      "mod_w_profile": {
+        "tooltip": "per-block modulation guidance preset です。off は MODEL をそのまま通します。"
+      },
+      "positive": {
+        "tooltip": "steering delta 計算に使う positive conditioning です。"
+      },
+      "negative": {
+        "tooltip": "steering delta 計算に使う negative conditioning です。"
+      }
+    }
+  },
+  "DiTCFGFSGPatch": {
+    "display_name": "DiT CFG-FSG/DCW Patch",
+    "description": "DCW、SMC-CFG、CFG++、FSG を 1 つの MODEL patch として適用します。有効にした機能で必要な値だけ optional input に接続します。DCW auto は clip と positive、SMC-CFG は cfg、CFG++/FSG は steps、cfg、sampler_name、scheduler、denoise が必要です。",
+    "inputs": {
+      "model": {
+        "tooltip": "DCW、SMC-CFG、CFG++、FSG の選択した補正を適用する DiT MODEL です。"
+      },
+      "enabled": {
+        "tooltip": "無効にすると入力 MODEL をそのまま返します。"
+      },
+      "dcw_mode": {
+        "tooltip": "DCW mode です。off/manual/auto から選びます。"
+      },
+      "dcw_lambda": {
+        "tooltip": "manual DCW strength です。auto mode では calibrator が per-step 値を予測します。"
+      },
+      "dcw_band_mask": {
+        "tooltip": "manual DCW correction を適用する Haar subband 範囲です。auto mode では LL に固定されます。"
+      },
+      "dcw_calibrator": {
+        "tooltip": "DCW auto mode で使う fusion-head safetensors artifact です。"
+      },
+      "smc_cfg": {
+        "tooltip": "α-adaptive SMC-CFG を有効にします。CFG++ と同時には使えません。"
+      },
+      "adaptive_smc_alpha": {
+        "tooltip": "SMC-CFG adaptive switching gain です。0 で SMC-CFG を無効にします。"
+      },
+      "smc_cfg_lambda": {
+        "tooltip": "SMC-CFG sliding-manifold slope λ です。"
+      },
+      "cfgpp": {
+        "tooltip": "CFG++ σ-scheduled CFG combine を有効にします。SMC-CFG と同時には使えません。"
+      },
+      "cfgpp_lambda": {
+        "tooltip": "CFG++ correction strength です。0 で CFG++ を無効にします。"
+      },
+      "fsg": {
+        "tooltip": "FSG fixed-point latent calibration を有効にします。SMC-CFG と同時には使えません。"
+      },
+      "fsg_band_lo": {
+        "tooltip": "FSG が有効になる sigma band の下限です。"
+      },
+      "fsg_band_hi": {
+        "tooltip": "FSG が有効になる sigma band の上限です。"
+      },
+      "fsg_k": {
+        "tooltip": "FSG fixed-point iteration 数です。0 で FSG を無効にします。"
+      },
+      "fsg_d_sigma": {
+        "tooltip": "FSG finite-difference sigma delta です。"
+      },
+      "fsg_gamma": {
+        "tooltip": "FSG damping 値です。0 で damping を使いません。"
+      },
+      "replace_existing_cfg": {
+        "tooltip": "既存の sampler_cfg_function を上書きするかを選びます。この patch を意図的に優先するときだけ有効にしてください。"
+      },
+      "steps": {
+        "tooltip": "downstream sampler の step 数です。cfgpp または fsg を有効にすると必要です。"
+      },
+      "cfg": {
+        "tooltip": "downstream sampler の CFG scale です。smc_cfg、cfgpp、fsg のいずれかを有効にすると必要です。"
+      },
+      "sampler_name": {
+        "tooltip": "downstream sampler 名です。cfgpp または fsg を有効にすると必要です。"
+      },
+      "scheduler": {
+        "tooltip": "downstream scheduler 名です。cfgpp または fsg を有効にすると必要です。"
+      },
+      "denoise": {
+        "tooltip": "downstream sampler の denoise 値です。cfgpp または fsg を有効にすると必要です。"
+      },
+      "clip": {
+        "tooltip": "CLIP encoder です。dcw_mode=auto で必要です。"
+      },
+      "positive": {
+        "tooltip": "positive conditioning です。dcw_mode=auto で必要です。"
+      }
+    }
+  },
+  "DiTSpectrumPatch": {
+    "display_name": "DiT Spectrum Patch",
+    "description": "standalone DiT Spectrum MODEL patcher です。通常 KSampler や Custom Sampler の前に接続し、final_layer 前の feature forecasting だけを適用します。",
+    "inputs": {
+      "model": {
+        "tooltip": "Spectrum を適用する DiT MODEL です。"
+      },
+      "steps": {
+        "tooltip": "downstream sampler の step 数と一致させる必要があります。"
+      },
+      "window_size": {
+        "tooltip": "初期 caching window です。1.0 は cached step を実質的に無効化します。"
+      },
+      "flex_window": {
+        "tooltip": "actual forward 後に window サイズを増やす値です。"
+      },
+      "warmup_steps": {
+        "tooltip": "最初に必ず actual DiT forward を実行する step 数です。"
+      },
+      "tail_actual_steps": {
+        "tooltip": "最後に必ず actual DiT forward を実行する step 数です。"
+      },
+      "blend_w": {
+        "tooltip": "Chebyshev 予測と Taylor 補間の blend 比率です。1.0 は純粋な Chebyshev です。"
+      },
+      "cheby_degree": {
+        "tooltip": "Chebyshev polynomial degree です。"
+      },
+      "ridge_lambda": {
+        "tooltip": "ridge regression の正則化強度です。"
+      },
+      "history_size": {
+        "tooltip": "forecaster が保持する観測 history buffer のサイズです。"
+      },
+      "enabled": {
+        "tooltip": "オフにすると入力 MODEL をそのまま返します。"
+      },
+      "one_sampler_only": {
+        "tooltip": "オンにすると、この patched MODEL を使う最初の sampler run だけに Spectrum を適用し、同じ workflow 内の後続 sampler run は通過させます。"
+      },
+      "verbose": {
+        "tooltip": "actual/cached step の判定をログに出力します。"
+      }
+    }
+  },
+  "DiTSpectrumPatchAdvanced": {
+    "display_name": "DiT Spectrum Patch Advanced",
+    "description": "互換性制御を備えた standalone DiT Spectrum MODEL patcher です。不確実な cached prediction を actual DiT forward に戻せます。",
+    "inputs": {
+      "model": {
+        "tooltip": "Spectrum を適用する DiT MODEL です。"
+      },
+      "steps": {
+        "tooltip": "downstream sampler の step 数と一致させる必要があります。"
+      },
+      "window_size": {
+        "tooltip": "初期 caching window です。1.0 は cached step を実質的に無効化します。"
+      },
+      "flex_window": {
+        "tooltip": "actual forward 後に window サイズを増やす値です。"
+      },
+      "warmup_steps": {
+        "tooltip": "最初に必ず actual DiT forward を実行する step 数です。"
+      },
+      "tail_actual_steps": {
+        "tooltip": "最後に必ず actual DiT forward を実行する step 数です。"
+      },
+      "blend_w": {
+        "tooltip": "Chebyshev 予測と Taylor 補間の blend 比率です。1.0 は純粋な Chebyshev です。"
+      },
+      "cheby_degree": {
+        "tooltip": "Chebyshev polynomial degree です。"
+      },
+      "ridge_lambda": {
+        "tooltip": "ridge regression の正則化強度です。"
+      },
+      "history_size": {
+        "tooltip": "forecaster が保持する観測 history buffer のサイズです。"
+      },
+      "enabled": {
+        "tooltip": "オフにすると入力 MODEL をそのまま返します。"
+      },
+      "one_sampler_only": {
+        "tooltip": "オンにすると、この patched MODEL を使う最初の sampler run だけに Spectrum を適用し、同じ workflow 内の後続 sampler run は通過させます。"
+      },
+      "verbose": {
+        "tooltip": "actual/cached step の判定をログに出力します。"
+      },
+      "compat_policy": {
+        "tooltip": "Spectrum が DiT block を skip してよい安全基準です。legacy は最速の既存動作、conservative は wrapper/shape/step/veto が不安全なら actual forward に戻し、strict は exact artist mix や multi-conditioning 向けに UUID がある場合だけ cache を許可します。"
+      }
+    }
+  }
+}

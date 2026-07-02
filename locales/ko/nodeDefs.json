@@ -1,0 +1,476 @@
+{
+  "SpectrumKSampler": {
+    "display_name": "KSampler (Spectrum)",
+    "description": "기본 KSampler를 대체하는 Spectrum 가속 sampler입니다. Chebyshev feature forecasting, SEA skip scheduling, optional mod guidance, SMC-CFG를 한 노드에서 사용합니다.",
+    "inputs": {
+      "model": {
+        "tooltip": "denoising에 사용할 MODEL입니다."
+      },
+      "seed": {
+        "tooltip": "noise 생성에 사용할 seed입니다."
+      },
+      "steps": {
+        "tooltip": "sampling step 수입니다."
+      },
+      "cfg": {
+        "tooltip": "Classifier-Free Guidance scale입니다."
+      },
+      "sampler_name": {
+        "tooltip": "사용할 sampler 알고리즘입니다."
+      },
+      "scheduler": {
+        "tooltip": "noise sigma schedule입니다."
+      },
+      "positive": {
+        "tooltip": "positive conditioning입니다."
+      },
+      "negative": {
+        "tooltip": "negative conditioning입니다."
+      },
+      "latent_image": {
+        "tooltip": "sampling을 시작할 latent입니다."
+      },
+      "denoise": {
+        "tooltip": "denoise 강도입니다. 1.0은 전체 denoise입니다."
+      },
+      "quality_tags": {
+        "tooltip": "mod guidance가 품질 방향으로 조향할 때 사용할 positive quality tag입니다."
+      },
+      "quality_neg": {
+        "tooltip": "quality steering axis의 negative baseline입니다. 비우면 CFG negative를 재사용합니다."
+      },
+      "mod_w_profile": {
+        "tooltip": "per-block modulation guidance preset입니다. off는 mod guidance를 비활성화합니다."
+      },
+      "refresh_ratio": {
+        "tooltip": "SEA skip scheduling 다이얼입니다. -1은 window 방식, 0은 자동, 양수는 명시적 refresh 비율입니다."
+      },
+      "adaptive_smc_alpha": {
+        "tooltip": "SMC-CFG alpha gain입니다. 0이면 일반 CFG combine을 사용합니다."
+      },
+      "fsg": {
+        "tooltip": "validated CFG++/FSG stack을 켭니다. CFG 1이 아닌 경우에 사용하며 SMC-CFG와 동시에 쓰지 않습니다."
+      },
+      "clip": {
+        "tooltip": "quality tag를 encode할 CLIP입니다. mod guidance를 사용할 때 연결합니다."
+      }
+    }
+  },
+  "SpectrumKSamplerAdvanced": {
+    "display_name": "KSampler (Spectrum + Mod Guidance 고급)",
+    "description": "Spectrum 가속 sampler의 advanced 버전입니다. mod guidance, forecasting, DCW, FSG, SMC-CFG 세부 값을 직접 조정합니다.",
+    "inputs": {
+      "model": {
+        "tooltip": "denoising에 사용할 MODEL입니다."
+      },
+      "clip": {
+        "tooltip": "quality tag와 DCW auto calibrator 입력을 encode할 CLIP입니다."
+      },
+      "seed": {
+        "tooltip": "noise 생성에 사용할 seed입니다."
+      },
+      "steps": {
+        "tooltip": "sampling step 수입니다."
+      },
+      "cfg": {
+        "tooltip": "Classifier-Free Guidance scale입니다."
+      },
+      "sampler_name": {
+        "tooltip": "사용할 sampler 알고리즘입니다."
+      },
+      "scheduler": {
+        "tooltip": "noise sigma schedule입니다."
+      },
+      "positive": {
+        "tooltip": "positive conditioning입니다."
+      },
+      "negative": {
+        "tooltip": "negative conditioning입니다."
+      },
+      "latent_image": {
+        "tooltip": "sampling을 시작할 latent입니다."
+      },
+      "denoise": {
+        "tooltip": "denoise 강도입니다. 1.0은 전체 denoise입니다."
+      },
+      "adapter": {
+        "tooltip": "mod guidance용 pooled_text_proj adapter입니다. auto 항목은 기본 weight를 처음 실행 시 내려받습니다."
+      },
+      "quality_tags": {
+        "tooltip": "mod guidance가 품질 방향으로 조향할 때 사용할 positive quality tag입니다."
+      },
+      "quality_neg": {
+        "tooltip": "quality steering axis의 negative baseline입니다. 비우면 CFG negative를 재사용합니다."
+      },
+      "mod_w": {
+        "tooltip": "per-block modulation guidance의 최대 강도입니다."
+      },
+      "mod_start_layer": {
+        "tooltip": "steering delta를 적용할 첫 block index입니다."
+      },
+      "mod_end_layer": {
+        "tooltip": "steering delta 적용을 멈출 exclusive end block index입니다. -1은 남은 모든 block입니다."
+      },
+      "mod_taper": {
+        "tooltip": "마지막 일부 slot에 taper_scale을 적용할 개수입니다."
+      },
+      "mod_taper_scale": {
+        "tooltip": "taper 구간에 곱할 배율입니다."
+      },
+      "mod_final_w": {
+        "tooltip": "final layer에 적용할 guidance 강도입니다. 기본 0.0은 output head를 건드리지 않습니다."
+      },
+      "window_size": {
+        "tooltip": "초기 Spectrum caching window입니다."
+      },
+      "flex_window": {
+        "tooltip": "actual forward 이후 window 크기를 늘리는 값입니다."
+      },
+      "warmup_steps": {
+        "tooltip": "초기에 항상 actual forward를 실행할 step 수입니다."
+      },
+      "blend_w": {
+        "tooltip": "Chebyshev 예측과 Taylor 보간의 blend 비율입니다. 1.0이면 순수 Chebyshev입니다."
+      },
+      "cheby_degree": {
+        "tooltip": "Chebyshev basis 개수입니다."
+      },
+      "ridge_lambda": {
+        "tooltip": "ridge regression 정규화 강도입니다."
+      },
+      "dcw_mode": {
+        "tooltip": "DCW correction mode입니다. off/manual/auto 중 선택합니다."
+      },
+      "dcw_lambda": {
+        "tooltip": "manual DCW post-step bias correction 강도입니다."
+      },
+      "dcw_band_mask": {
+        "tooltip": "DCW correction을 적용할 Haar subband 범위입니다."
+      },
+      "dcw_calibrator": {
+        "tooltip": "DCW auto mode에서 사용할 fusion-head safetensors artifact입니다."
+      },
+      "cfgpp_lambda": {
+        "tooltip": "CFG++ substrate strength입니다. 0이면 일반 CFG입니다."
+      },
+      "fsg": {
+        "tooltip": "Foresight Guidance를 켭니다. in-band step마다 추가 forward가 필요합니다."
+      },
+      "fsg_band_lo": {
+        "tooltip": "FSG가 실행되는 sigma band의 하한입니다."
+      },
+      "fsg_band_hi": {
+        "tooltip": "FSG가 실행되는 sigma band의 상한입니다."
+      },
+      "fsg_k": {
+        "tooltip": "in-band step마다 수행할 FSG fixed-point iteration 수입니다."
+      },
+      "fsg_d_sigma": {
+        "tooltip": "FSG forward-backward stride delta sigma입니다."
+      },
+      "fsg_gamma": {
+        "tooltip": "FSG calibration guidance gamma입니다. 0이면 CFG scale을 사용합니다."
+      },
+      "adaptive_smc_alpha": {
+        "tooltip": "SMC-CFG alpha gain입니다. 0이면 일반 CFG combine을 사용합니다."
+      },
+      "smc_cfg_lambda": {
+        "tooltip": "SMC-CFG sliding-manifold slope lambda입니다."
+      }
+    }
+  },
+  "SpectrumSPDKSampler": {
+    "display_name": "KSampler (Spectrum + SPD / SPEED)",
+    "description": "Spectrum과 SPD/SPEED를 결합한 sampler입니다. low-res prefix 이후 full-res로 확장하고 Spectrum이 tail을 예측합니다.",
+    "inputs": {
+      "model": {
+        "tooltip": "denoising에 사용할 MODEL입니다."
+      },
+      "seed": {
+        "tooltip": "noise 생성에 사용할 seed입니다."
+      },
+      "steps": {
+        "tooltip": "sampling step 수입니다."
+      },
+      "cfg": {
+        "tooltip": "Classifier-Free Guidance scale입니다."
+      },
+      "sampler_name": {
+        "tooltip": "사용할 sampler 알고리즘입니다."
+      },
+      "scheduler": {
+        "tooltip": "noise sigma schedule입니다."
+      },
+      "positive": {
+        "tooltip": "positive conditioning입니다."
+      },
+      "negative": {
+        "tooltip": "negative conditioning입니다."
+      },
+      "latent_image": {
+        "tooltip": "sampling을 시작할 latent입니다."
+      },
+      "denoise": {
+        "tooltip": "denoise 강도입니다. 1.0은 전체 denoise입니다."
+      },
+      "split_mode": {
+        "tooltip": "SPD resolution schedule mode입니다. 현재 single handoff를 사용합니다."
+      },
+      "spd_scale": {
+        "tooltip": "low-res phase에서 사용할 latent 해상도 scale입니다."
+      },
+      "spd_sigma": {
+        "tooltip": "low-res에서 full-res로 전환할 sigma 값입니다."
+      },
+      "adaptive_smc_alpha": {
+        "tooltip": "SMC-CFG alpha gain입니다. 0이면 일반 CFG combine을 사용합니다."
+      }
+    }
+  },
+  "SpectrumSPDLoRAKSampler": {
+    "display_name": "KSampler (SPD LoRA / 자동 스케줄)",
+    "description": "SPD-trained LoRA를 MODEL에 적용하고 adapter metadata에서 SPEED schedule을 자동으로 읽어 sampling합니다.",
+    "inputs": {
+      "model": {
+        "tooltip": "LoRA를 적용하고 denoising에 사용할 MODEL입니다."
+      },
+      "seed": {
+        "tooltip": "noise 생성에 사용할 seed입니다."
+      },
+      "steps": {
+        "tooltip": "sampling step 수입니다."
+      },
+      "cfg": {
+        "tooltip": "Classifier-Free Guidance scale입니다."
+      },
+      "sampler_name": {
+        "tooltip": "사용할 sampler 알고리즘입니다."
+      },
+      "scheduler": {
+        "tooltip": "noise sigma schedule입니다."
+      },
+      "positive": {
+        "tooltip": "positive conditioning입니다."
+      },
+      "negative": {
+        "tooltip": "negative conditioning입니다."
+      },
+      "latent_image": {
+        "tooltip": "sampling을 시작할 latent입니다."
+      },
+      "denoise": {
+        "tooltip": "denoise 강도입니다. 1.0은 전체 denoise입니다."
+      },
+      "lora_name": {
+        "tooltip": "SPD schedule metadata를 포함한 LoRA입니다. metadata가 없으면 기본 handoff 값으로 fallback합니다."
+      },
+      "lora_strength": {
+        "tooltip": "MODEL에 적용할 LoRA strength입니다."
+      },
+      "adaptive_smc_alpha": {
+        "tooltip": "SMC-CFG alpha gain입니다. 0이면 일반 CFG combine을 사용합니다."
+      }
+    }
+  },
+  "AnimaModGuidance": {
+    "display_name": "Anima Mod Guidance (모델 패치)",
+    "description": "modulation guidance를 standalone MODEL patcher로 적용합니다. 출력 MODEL은 일반 sampler, Spectrum, SPEED 앞에 연결할 수 있습니다.",
+    "inputs": {
+      "model": {
+        "tooltip": "mod guidance를 적용할 MODEL입니다."
+      },
+      "clip": {
+        "tooltip": "quality tag를 encode할 CLIP입니다."
+      },
+      "quality_tags": {
+        "tooltip": "generation을 조향할 positive quality tag입니다."
+      },
+      "quality_neg": {
+        "tooltip": "quality steering axis의 negative baseline입니다. 비우면 CFG negative를 재사용합니다."
+      },
+      "mod_w_profile": {
+        "tooltip": "per-block modulation guidance preset입니다. off는 MODEL을 그대로 통과시킵니다."
+      },
+      "positive": {
+        "tooltip": "steering delta 계산에 사용할 positive conditioning입니다."
+      },
+      "negative": {
+        "tooltip": "steering delta 계산에 사용할 negative conditioning입니다."
+      }
+    }
+  },
+  "DiTCFGFSGPatch": {
+    "display_name": "DiT CFG-FSG/DCW 패치",
+    "description": "DCW, SMC-CFG, CFG++, FSG를 하나의 MODEL 패치로 적용합니다. 기능을 켰을 때 필요한 값만 optional input으로 연결합니다. DCW auto는 clip과 positive가 필요하고, SMC-CFG는 cfg가 필요하며, CFG++/FSG는 steps, cfg, sampler_name, scheduler, denoise가 필요합니다.",
+    "inputs": {
+      "model": {
+        "tooltip": "DCW, SMC-CFG, CFG++, FSG 중 선택한 보정을 적용할 DiT MODEL입니다."
+      },
+      "enabled": {
+        "tooltip": "끄면 입력 MODEL을 그대로 반환합니다."
+      },
+      "dcw_mode": {
+        "tooltip": "DCW 모드입니다. off/manual/auto 중 선택합니다."
+      },
+      "dcw_lambda": {
+        "tooltip": "manual DCW 강도입니다. auto 모드에서는 calibrator가 per-step 값을 예측합니다."
+      },
+      "dcw_band_mask": {
+        "tooltip": "manual DCW correction을 적용할 Haar subband 범위입니다. auto 모드는 LL로 고정됩니다."
+      },
+      "dcw_calibrator": {
+        "tooltip": "DCW auto mode에서 사용할 fusion-head safetensors artifact입니다."
+      },
+      "smc_cfg": {
+        "tooltip": "α-adaptive SMC-CFG를 켭니다. CFG++와 동시에 사용할 수 없습니다."
+      },
+      "adaptive_smc_alpha": {
+        "tooltip": "SMC-CFG adaptive switching gain입니다. 0이면 SMC-CFG가 꺼집니다."
+      },
+      "smc_cfg_lambda": {
+        "tooltip": "SMC-CFG sliding-manifold slope λ입니다."
+      },
+      "cfgpp": {
+        "tooltip": "CFG++ σ-scheduled CFG combine을 켭니다. SMC-CFG와 동시에 사용할 수 없습니다."
+      },
+      "cfgpp_lambda": {
+        "tooltip": "CFG++ correction 강도입니다. 0이면 CFG++가 꺼집니다."
+      },
+      "fsg": {
+        "tooltip": "FSG fixed-point latent calibration을 켭니다. SMC-CFG와 동시에 사용할 수 없습니다."
+      },
+      "fsg_band_lo": {
+        "tooltip": "FSG가 활성화되는 sigma band의 하한입니다."
+      },
+      "fsg_band_hi": {
+        "tooltip": "FSG가 활성화되는 sigma band의 상한입니다."
+      },
+      "fsg_k": {
+        "tooltip": "FSG fixed-point iteration 수입니다. 0이면 FSG가 꺼집니다."
+      },
+      "fsg_d_sigma": {
+        "tooltip": "FSG finite-difference sigma delta입니다."
+      },
+      "fsg_gamma": {
+        "tooltip": "FSG damping 값입니다. 0이면 damping을 쓰지 않습니다."
+      },
+      "replace_existing_cfg": {
+        "tooltip": "기존 sampler_cfg_function을 덮어쓸지 선택합니다. 의도적으로 이 패치를 우선할 때만 켭니다."
+      },
+      "steps": {
+        "tooltip": "downstream sampler의 step 수입니다. cfgpp 또는 fsg를 켤 때 필요합니다."
+      },
+      "cfg": {
+        "tooltip": "downstream sampler의 CFG scale입니다. smc_cfg, cfgpp, fsg 중 하나를 켤 때 필요합니다."
+      },
+      "sampler_name": {
+        "tooltip": "downstream sampler 이름입니다. cfgpp 또는 fsg를 켤 때 필요합니다."
+      },
+      "scheduler": {
+        "tooltip": "downstream scheduler 이름입니다. cfgpp 또는 fsg를 켤 때 필요합니다."
+      },
+      "denoise": {
+        "tooltip": "downstream sampler의 denoise 값입니다. cfgpp 또는 fsg를 켤 때 필요합니다."
+      },
+      "clip": {
+        "tooltip": "CLIP encoder입니다. dcw_mode=auto일 때 필요합니다."
+      },
+      "positive": {
+        "tooltip": "positive conditioning입니다. dcw_mode=auto일 때 필요합니다."
+      }
+    }
+  },
+  "DiTSpectrumPatch": {
+    "display_name": "DiT Spectrum 패치",
+    "description": "standalone DiT Spectrum MODEL patcher입니다. 일반 KSampler나 Custom Sampler 앞에 연결해서 final_layer 이전 feature forecasting만 적용합니다.",
+    "inputs": {
+      "model": {
+        "tooltip": "Spectrum을 적용할 DiT MODEL입니다."
+      },
+      "steps": {
+        "tooltip": "downstream sampler의 step 수와 맞춰야 합니다."
+      },
+      "window_size": {
+        "tooltip": "초기 caching window입니다. 1.0은 cached step을 사실상 비활성화합니다."
+      },
+      "flex_window": {
+        "tooltip": "actual forward 이후 window 크기를 늘리는 값입니다."
+      },
+      "warmup_steps": {
+        "tooltip": "초기에 항상 actual DiT forward를 실행할 step 수입니다."
+      },
+      "tail_actual_steps": {
+        "tooltip": "마지막에 항상 actual DiT forward를 실행할 step 수입니다."
+      },
+      "blend_w": {
+        "tooltip": "Chebyshev 예측과 Taylor 보간의 blend 비율입니다. 1.0이면 순수 Chebyshev입니다."
+      },
+      "cheby_degree": {
+        "tooltip": "Chebyshev polynomial degree입니다."
+      },
+      "ridge_lambda": {
+        "tooltip": "ridge regression 정규화 강도입니다."
+      },
+      "history_size": {
+        "tooltip": "forecaster가 유지할 관측 history buffer 크기입니다."
+      },
+      "enabled": {
+        "tooltip": "끄면 입력 MODEL을 그대로 반환합니다."
+      },
+      "one_sampler_only": {
+        "tooltip": "켜면 이 patched MODEL을 소비하는 첫 sampler run에만 Spectrum을 적용하고, 같은 workflow의 이후 sampler run은 그대로 통과시킵니다."
+      },
+      "verbose": {
+        "tooltip": "actual/cached step 결정을 로그로 출력합니다."
+      }
+    }
+  },
+  "DiTSpectrumPatchAdvanced": {
+    "display_name": "DiT Spectrum 패치 고급",
+    "description": "호환성 제어가 포함된 standalone DiT Spectrum MODEL patcher입니다. 불확실한 cached prediction을 actual DiT forward로 되돌릴 수 있습니다.",
+    "inputs": {
+      "model": {
+        "tooltip": "Spectrum을 적용할 DiT MODEL입니다."
+      },
+      "steps": {
+        "tooltip": "downstream sampler의 step 수와 맞춰야 합니다."
+      },
+      "window_size": {
+        "tooltip": "초기 caching window입니다. 1.0은 cached step을 사실상 비활성화합니다."
+      },
+      "flex_window": {
+        "tooltip": "actual forward 이후 window 크기를 늘리는 값입니다."
+      },
+      "warmup_steps": {
+        "tooltip": "초기에 항상 actual DiT forward를 실행할 step 수입니다."
+      },
+      "tail_actual_steps": {
+        "tooltip": "마지막에 항상 actual DiT forward를 실행할 step 수입니다."
+      },
+      "blend_w": {
+        "tooltip": "Chebyshev 예측과 Taylor 보간의 blend 비율입니다. 1.0이면 순수 Chebyshev입니다."
+      },
+      "cheby_degree": {
+        "tooltip": "Chebyshev polynomial degree입니다."
+      },
+      "ridge_lambda": {
+        "tooltip": "ridge regression 정규화 강도입니다."
+      },
+      "history_size": {
+        "tooltip": "forecaster가 유지할 관측 history buffer 크기입니다."
+      },
+      "enabled": {
+        "tooltip": "끄면 입력 MODEL을 그대로 반환합니다."
+      },
+      "one_sampler_only": {
+        "tooltip": "켜면 이 patched MODEL을 소비하는 첫 sampler run에만 Spectrum을 적용하고, 같은 workflow의 이후 sampler run은 그대로 통과시킵니다."
+      },
+      "verbose": {
+        "tooltip": "actual/cached step 결정을 로그로 출력합니다."
+      },
+      "compat_policy": {
+        "tooltip": "Spectrum이 DiT block을 건너뛰는 안전 기준입니다. legacy는 가장 빠른 기존 방식, conservative는 wrapper/shape/step/veto가 불안전하면 actual forward로 대체, strict는 exact artist mix나 multi-conditioning용으로 UUID가 있을 때만 cache를 허용합니다."
+      }
+    }
+  }
+}

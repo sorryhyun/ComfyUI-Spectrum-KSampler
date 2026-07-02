@@ -1,15 +1,21 @@
 """ComfyUI node definitions for Spectrum inference acceleration."""
 
+import copy
 import json
 import logging
+import math
 
 import comfy.samplers
 import comfy.sd
 import comfy.utils
 import folder_paths
 
+from .dcw import install_dcw
+from .dcw_calibrator import setup_dcw_calibrator
+from .fsg import FSGCalibrator, fsg_step_indices, install_cfgpp, install_fsg
 from .mod_guidance import AUTO_ADAPTER_SENTINEL, setup_mod_guidance
-from .spectrum import apply_dit_spectrum_patch, spectrum_sample
+from .smc_cfg import install_smc_cfg
+from .spectrum import COMPAT_POLICIES, apply_dit_spectrum_patch, spectrum_sample
 
 logger = logging.getLogger(__name__)
 
@@ -283,6 +289,21 @@ _SPECTRUM_DEFAULTS = dict(
     ridge_lambda=0.1,
 )
 
+_COMPAT_POLICY_INPUT = (
+    list(COMPAT_POLICIES),
+    {
+        "default": "legacy",
+        "tooltip": (
+            "How safely Spectrum is allowed to skip DiT blocks. 'legacy' is the "
+            "fastest old behavior. 'conservative' runs an actual DiT forward "
+            "instead of a cached prediction when wrappers, latent shape, step "
+            "count, or veto checks look unsafe. 'strict' is the safest choice "
+            "for exact artist/multi-conditioning mixes: it also requires "
+            "ComfyUI per-conditioning UUIDs before caching."
+        ),
+    },
+)
+
 # SPD / SPEED: multi-resolution progressive diffusion composed with Spectrum
 # (naive-reset compose, validated in anima_lora/bench/spd/compose_report.md).
 # Low-res prefix runs uncached; at σ=spd_sigma the latent is spectral-expanded
@@ -416,7 +437,7 @@ _SMC_CFG_LAMBDA_INPUT = (
 
 # DCW: SNR-t bias correction (arXiv:2604.16044). Anima form, λ < 0,
 # schedule fixed to one_minus_sigma. See anima_lora/docs/methods/dcw.md.
-# Exposed on the Advanced node only — the basic + mod nodes default to off.
+# Exposed on the Advanced sampler and the standalone DiT CFG-FSG/DCW patcher.
 _DCW_INPUTS = {
     "dcw_mode": (
         ["off", "manual", "auto"],
@@ -600,6 +621,71 @@ _FSG_INPUTS = {
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+
+def _clone_model_options(model):
+    """Copy model_options so model patch nodes do not mutate the input MODEL."""
+    try:
+        model.model_options = copy.deepcopy(model.model_options)
+    except Exception as e:
+        logger.warning(
+            "DiT model patch: deepcopy(model_options) failed (%s); using a shallow copy.",
+            e,
+        )
+        model.model_options = dict(model.model_options)
+
+
+def _missing_option_error(feature_name, missing, *, hint):
+    raise RuntimeError(
+        f"{feature_name}: missing required optional input(s): "
+        + ", ".join(missing)
+        + f". {hint}"
+    )
+
+
+def _require_option_values(feature_name, *, hint, **values):
+    missing = [name for name, value in values.items() if value is None]
+    if missing:
+        _missing_option_error(feature_name, missing, hint=hint)
+
+
+def _sampler_cfg_function_exists(model):
+    return model.model_options.get("sampler_cfg_function") is not None
+
+
+def _require_sampler_cfg_slot(model, feature_name, replace_existing_cfg):
+    if not _sampler_cfg_function_exists(model) or replace_existing_cfg:
+        return
+    raise RuntimeError(
+        f"{feature_name} needs sampler_cfg_function, but this MODEL already has "
+        "one. Disable the existing CFG patch or set replace_existing_cfg=true."
+    )
+
+
+def _add_spectrum_cache_veto(model, veto):
+    """Register a cache-veto callback consumed by DiT Spectrum Patch Advanced."""
+    existing = model.model_options.get("spectrum_cache_vetoes")
+    if existing is None:
+        vetoes = []
+    elif callable(existing):
+        vetoes = [existing]
+    else:
+        try:
+            vetoes = list(existing)
+        except TypeError:
+            vetoes = []
+    vetoes.append(veto)
+    model.model_options["spectrum_cache_vetoes"] = vetoes
+
+
+def _fsg_spectrum_cache_veto(fsg_steps):
+    fsg_steps = frozenset(fsg_steps)
+
+    def veto(state, **_kwargs):
+        return getattr(state, "step_idx", -1) not in fsg_steps
+
+    veto.__name__ = "dit_cfg_fsg_spectrum_cache_veto"
+    return veto
 
 
 def _apply_mod_guidance(
@@ -1042,6 +1128,315 @@ class AnimaModGuidance:
         return (m,)
 
 
+class DiTCFGFSGPatch:
+    """Standalone correction patcher for DiT samplers."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": (
+                    "MODEL",
+                    {
+                        "tooltip": (
+                            "DiT MODEL to patch with DCW, SMC-CFG, CFG++, and/or FSG."
+                        )
+                    },
+                ),
+                "enabled": (
+                    "BOOLEAN",
+                    {
+                        "default": True,
+                        "tooltip": "Disable to pass the input MODEL through unchanged.",
+                    },
+                ),
+                **_DCW_INPUTS,
+                "smc_cfg": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": (
+                            "Enable α-adaptive SMC-CFG. Mutually exclusive with "
+                            "CFG++ because both replace sampler_cfg_function."
+                        ),
+                    },
+                ),
+                "adaptive_smc_alpha": _SMC_CFG_ALPHA_INPUT,
+                "smc_cfg_lambda": _SMC_CFG_LAMBDA_INPUT,
+                "cfgpp": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": (
+                            "Enable CFG++ σ-scheduled CFG combine. Mutually "
+                            "exclusive with SMC-CFG."
+                        ),
+                    },
+                ),
+                **_FSG_INPUTS,
+                "replace_existing_cfg": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": (
+                            "Allow this node to overwrite an existing sampler_cfg_function. "
+                            "Leave false unless you intentionally want this patch to win."
+                        ),
+                    },
+                ),
+            },
+            "optional": {
+                "steps": (
+                    "INT",
+                    {
+                        "default": 30,
+                        "min": 1,
+                        "max": 10000,
+                        "forceInput": True,
+                        "tooltip": (
+                            "Downstream sampler step count. Required when cfgpp or fsg is enabled."
+                        ),
+                    },
+                ),
+                "cfg": (
+                    "FLOAT",
+                    {
+                        "default": 4.0,
+                        "min": 0.0,
+                        "max": 100.0,
+                        "step": 0.1,
+                        "round": 0.01,
+                        "forceInput": True,
+                        "tooltip": (
+                            "Downstream sampler CFG scale. Required when smc_cfg, cfgpp, or fsg is enabled."
+                        ),
+                    },
+                ),
+                "sampler_name": (
+                    comfy.samplers.KSampler.SAMPLERS,
+                    {
+                        "forceInput": True,
+                        "tooltip": (
+                            "Downstream sampler name. Required when cfgpp or fsg is enabled."
+                        ),
+                    },
+                ),
+                "scheduler": (
+                    comfy.samplers.KSampler.SCHEDULERS,
+                    {
+                        "forceInput": True,
+                        "tooltip": (
+                            "Downstream scheduler name. Required when cfgpp or fsg is enabled."
+                        ),
+                    },
+                ),
+                "denoise": (
+                    "FLOAT",
+                    {
+                        "default": 1.0,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.01,
+                        "forceInput": True,
+                        "tooltip": (
+                            "Downstream sampler denoise value. Required when cfgpp or fsg is enabled."
+                        ),
+                    },
+                ),
+                "clip": (
+                    "CLIP",
+                    {
+                        "tooltip": "CLIP encoder. Required when dcw_mode=auto.",
+                    },
+                ),
+                "positive": (
+                    "CONDITIONING",
+                    {
+                        "tooltip": (
+                            "Positive conditioning. Required when dcw_mode=auto."
+                        ),
+                    },
+                ),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    FUNCTION = "patch"
+    CATEGORY = "model_patches"
+    DESCRIPTION = (
+        "Standalone DiT correction model patch. Groups DCW, SMC-CFG, CFG++, and "
+        "FSG in one patcher. Optional inputs are required only by enabled features: "
+        "dcw_mode=auto needs clip and positive; smc_cfg needs cfg; cfgpp/fsg need "
+        "steps, cfg, sampler_name, scheduler, and denoise."
+    )
+    OUTPUT_TOOLTIPS = (
+        "MODEL clone patched with the selected correction hooks, or the input MODEL when disabled.",
+    )
+
+    def patch(
+        self,
+        model,
+        enabled=True,
+        dcw_mode="off",
+        dcw_lambda=0.01,
+        dcw_band_mask="LL",
+        dcw_calibrator=AUTO_CALIBRATOR_SENTINEL,
+        smc_cfg=False,
+        adaptive_smc_alpha=_SMC_CFG_ALPHA_DEFAULT,
+        smc_cfg_lambda=_SMC_CFG_LAMBDA_DEFAULT,
+        cfgpp=False,
+        cfgpp_lambda=0.0,
+        fsg=False,
+        fsg_band_lo=0.59,
+        fsg_band_hi=0.75,
+        fsg_k=3,
+        fsg_d_sigma=0.1,
+        fsg_gamma=0.0,
+        replace_existing_cfg=False,
+        steps=None,
+        cfg=None,
+        sampler_name=None,
+        scheduler=None,
+        denoise=None,
+        clip=None,
+        positive=None,
+    ):
+        if not enabled:
+            return (model,)
+
+        want_dcw = dcw_mode != "off" and (
+            dcw_mode == "auto" or not math.isclose(float(dcw_lambda), 0.0)
+        )
+        want_smc = bool(smc_cfg) and float(adaptive_smc_alpha) > 0.0
+        want_cfgpp = bool(cfgpp) and float(cfgpp_lambda) > 0.0
+        want_fsg = bool(fsg) and int(fsg_k) > 0
+        want_cfg_features = want_smc or want_cfgpp or want_fsg
+
+        if not (want_dcw or want_cfg_features):
+            return (model,)
+        if want_smc and want_cfgpp:
+            raise RuntimeError(
+                "DiT CFG-FSG/DCW Patch: SMC-CFG and CFG++ both replace "
+                "sampler_cfg_function. Disable one of them."
+            )
+        if want_smc and want_fsg:
+            raise RuntimeError(
+                "DiT CFG-FSG/DCW Patch: FSG is validated on CFG++/plain CFG, not on "
+                "SMC-CFG. Disable either smc_cfg or fsg."
+            )
+
+        if dcw_mode == "auto":
+            _require_option_values(
+                "DiT CFG-FSG/DCW Patch dcw_mode=auto",
+                hint=(
+                    "Connect clip and positive optional inputs, or set dcw_mode "
+                    "to manual/off."
+                ),
+                clip=clip,
+                positive=positive,
+            )
+
+        cfg_value = None
+        if want_cfg_features:
+            _require_option_values(
+                "DiT CFG-FSG/DCW Patch CFG correction",
+                hint=(
+                    "Connect cfg from the downstream sampler when smc_cfg, cfgpp, "
+                    "or fsg is enabled."
+                ),
+                cfg=cfg,
+            )
+            cfg_value = float(cfg)
+            if math.isclose(cfg_value, 1.0):
+                logger.warning(
+                    "DiT CFG-FSG/DCW Patch: CFG/FSG corrections need cfg != 1.0; ignoring them."
+                )
+                want_smc = want_cfgpp = want_fsg = False
+                want_cfg_features = False
+
+        if want_cfgpp or want_fsg:
+            _require_option_values(
+                "DiT CFG-FSG/DCW Patch CFG++/FSG",
+                hint=(
+                    "Connect steps, sampler_name, scheduler, and denoise from the "
+                    "downstream sampler when cfgpp or fsg is enabled."
+                ),
+                steps=steps,
+                sampler_name=sampler_name,
+                scheduler=scheduler,
+                denoise=denoise,
+            )
+            steps = int(steps)
+            sampler_name = str(sampler_name)
+            scheduler = str(scheduler)
+            denoise = float(denoise)
+
+        if not (want_dcw or want_cfg_features):
+            return (model,)
+        if want_fsg and not want_cfgpp:
+            logger.warning(
+                "DiT CFG-FSG/DCW Patch: FSG is enabled without CFG++; this is an "
+                "experimental plain-CFG substrate."
+            )
+
+        m = model.clone()
+        _clone_model_options(m)
+
+        if want_dcw:
+            calibrator = None
+            if dcw_mode == "auto":
+                calibrator = setup_dcw_calibrator(m, clip, positive, dcw_calibrator)
+            install_dcw(
+                m,
+                lam=float(dcw_lambda),
+                schedule="one_minus_sigma",
+                band_mask=dcw_band_mask,
+                calibrator=calibrator,
+            )
+
+        if want_smc:
+            _require_sampler_cfg_slot(m, "SMC-CFG", replace_existing_cfg)
+            install_smc_cfg(
+                m,
+                alpha=float(adaptive_smc_alpha),
+                lam=float(smc_cfg_lambda),
+            )
+
+        sigma_schedule = None
+        if want_cfgpp or want_fsg:
+            ks_sched = comfy.samplers.KSampler(
+                m,
+                steps=steps,
+                device=m.load_device,
+                sampler=sampler_name,
+                scheduler=scheduler,
+                denoise=denoise,
+            )
+            sigma_schedule = [float(s) for s in ks_sched.sigmas]
+
+        if want_cfgpp:
+            _require_sampler_cfg_slot(m, "CFG++", replace_existing_cfg)
+            install_cfgpp(m, lam=float(cfgpp_lambda), sigmas=sigma_schedule)
+
+        if want_fsg:
+            fsg_obj = FSGCalibrator(
+                band=(float(fsg_band_lo), float(fsg_band_hi)),
+                k=int(fsg_k),
+                d_sigma=float(fsg_d_sigma),
+                gamma=(float(fsg_gamma) if fsg_gamma and fsg_gamma > 0.0 else None),
+            )
+            fsg_steps = fsg_step_indices(fsg_obj, sigma_schedule, steps)
+            install_fsg(m, fsg=fsg_obj, guidance_scale=cfg_value)
+            _add_spectrum_cache_veto(m, _fsg_spectrum_cache_veto(fsg_steps))
+            logger.info(
+                "DiT CFG-FSG/DCW Patch: FSG active on %d in-band steps; Spectrum "
+                "cached prediction is vetoed for those steps.",
+                len(fsg_steps),
+            )
+
+        return (m,)
+
+
 class DiTSpectrumPatch:
     """Standalone DiT Spectrum MODEL patcher.
 
@@ -1204,6 +1599,59 @@ class DiTSpectrumPatch:
             enabled=enabled,
             one_sampler_only=one_sampler_only,
             verbose=verbose,
+        )
+        return (patched,)
+
+
+class DiTSpectrumPatchAdvanced(DiTSpectrumPatch):
+    """Standalone DiT Spectrum MODEL patcher with compatibility controls."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        inputs = DiTSpectrumPatch.INPUT_TYPES()
+        inputs["required"]["compat_policy"] = _COMPAT_POLICY_INPUT
+        return inputs
+
+    DESCRIPTION = (
+        "Standalone DiT Spectrum model patch with compatibility controls. "
+        "Use 'legacy' for existing behavior, or 'conservative'/'strict' when "
+        "multi-positive conditioning, chained model wrappers, Custom Sampler "
+        "flows, or cache veto callbacks should fall back to actual DiT forwards "
+        "instead of using uncertain cached predictions."
+    )
+
+    def patch(
+        self,
+        model,
+        steps=30,
+        window_size=2.0,
+        flex_window=0.25,
+        warmup_steps=6,
+        tail_actual_steps=3,
+        blend_w=0.3,
+        cheby_degree=3,
+        ridge_lambda=0.1,
+        history_size=100,
+        enabled=True,
+        one_sampler_only=False,
+        verbose=False,
+        compat_policy="legacy",
+    ):
+        patched = apply_dit_spectrum_patch(
+            model,
+            steps=steps,
+            window_size=window_size,
+            flex_window=flex_window,
+            warmup_steps=warmup_steps,
+            tail_actual_steps=tail_actual_steps,
+            blend_w=blend_w,
+            cheby_degree=cheby_degree,
+            ridge_lambda=ridge_lambda,
+            history_size=history_size,
+            enabled=enabled,
+            one_sampler_only=one_sampler_only,
+            verbose=verbose,
+            compat_policy=compat_policy,
         )
         return (patched,)
 
@@ -1408,7 +1856,9 @@ NODE_CLASS_MAPPINGS = {
     "SpectrumSPDKSampler": SpectrumSPDKSampler,
     "SpectrumSPDLoRAKSampler": SpectrumSPDLoRAKSampler,
     "AnimaModGuidance": AnimaModGuidance,
+    "DiTCFGFSGPatch": DiTCFGFSGPatch,
     "DiTSpectrumPatch": DiTSpectrumPatch,
+    "DiTSpectrumPatchAdvanced": DiTSpectrumPatchAdvanced,
     # Deprecated aliases — the mod-guidance + SEA samplers are now folded into
     # the unified SpectrumKSampler (mod_w_profile + refresh_ratio dials). These
     # keys are kept so saved workflows referencing them still load; they are
@@ -1424,5 +1874,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SpectrumSPDKSampler": "KSampler (Spectrum + SPD / SPEED)",
     "SpectrumSPDLoRAKSampler": "KSampler (SPD LoRA / auto-schedule)",
     "AnimaModGuidance": "Anima Mod Guidance (model patch)",
+    "DiTCFGFSGPatch": "DiT CFG-FSG/DCW Patch",
     "DiTSpectrumPatch": "DiT Spectrum Patch",
+    "DiTSpectrumPatchAdvanced": "DiT Spectrum Patch Advanced",
 }
