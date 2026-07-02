@@ -1,9 +1,11 @@
 """Spectrum state management, fast-forward path, and shared sampling logic."""
 
+from __future__ import annotations
+
 import copy
 import logging
 import math
-from typing import List, Optional, Dict, Sequence
+from typing import Dict, Hashable, List, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -28,6 +30,9 @@ from .smc_cfg import install_smc_cfg
 from .fsg import FSGCalibrator, fsg_step_indices, install_cfgpp, install_fsg
 
 logger = logging.getLogger(__name__)
+
+COMPAT_POLICIES = ("legacy", "conservative", "strict")
+DEFAULT_COMPAT_POLICY = "legacy"
 
 # Anima DiT patches the latent with spatial_patch_size=2, so latent H/W must
 # be even (equivalently pixel H/W mod-16). Users picking odd-mod-32 pixel
@@ -112,6 +117,211 @@ def _spectrum_fast_forward(
     return dit.unpatchify(x)
 
 
+def _normalize_compat_policy(policy: Optional[str]) -> str:
+    if policy in COMPAT_POLICIES:
+        return policy
+    logger.warning(
+        "Spectrum: unknown compat_policy=%r; using %s",
+        policy,
+        DEFAULT_COMPAT_POLICY,
+    )
+    return DEFAULT_COMPAT_POLICY
+
+
+def _spectrum_batch_keys(c, cond_or_uncond: Sequence[int]) -> list:
+    """Return branch-stable forecaster keys for the current ComfyUI batch."""
+    fallback = [int(cou) for cou in cond_or_uncond]
+    transformer_options = c.get("transformer_options", {}) if isinstance(c, dict) else {}
+    uuids = transformer_options.get("uuids")
+    if uuids is None:
+        return fallback
+    if torch.is_tensor(uuids):
+        uuids = uuids.detach().cpu().tolist()
+    try:
+        uuid_list = list(uuids)
+    except TypeError:
+        return fallback
+    if len(uuid_list) != len(fallback):
+        return fallback
+    return [(cou, str(uid)) for cou, uid in zip(fallback, uuid_list)]
+
+
+def _wrapper_cache_safe(old_wrapper) -> bool:
+    if old_wrapper is None:
+        return True
+    if getattr(old_wrapper, "__spectrum_requires_actual__", False):
+        return False
+    return bool(getattr(old_wrapper, "__spectrum_cache_safe__", False))
+
+
+def _uses_uuid_branch_keys(keys: Sequence[Hashable]) -> bool:
+    return all(isinstance(key, tuple) and len(key) == 2 for key in keys)
+
+
+def _spectrum_context_changed(
+    state: SpectrumState, input_x: torch.Tensor, keys: Sequence[Hashable]
+) -> bool:
+    del keys
+    if state.input_shape is not None and tuple(input_x.shape[1:]) != state.input_shape:
+        return True
+    return False
+
+
+def _iter_cache_vetoes(model_options) -> list:
+    if not isinstance(model_options, dict):
+        return []
+    vetoes = model_options.get("spectrum_cache_vetoes", [])
+    if callable(vetoes):
+        return [vetoes]
+    try:
+        return [v for v in vetoes if callable(v)]
+    except TypeError:
+        return []
+
+
+def _passes_cache_vetoes(
+    state: SpectrumState,
+    args,
+    keys: Sequence[Hashable],
+    input_x: torch.Tensor,
+    timestep: torch.Tensor,
+    c,
+    model_options,
+) -> bool:
+    for veto in _iter_cache_vetoes(model_options):
+        try:
+            allowed = veto(
+                state=state,
+                args=args,
+                keys=keys,
+                input_x=input_x,
+                timestep=timestep,
+                c=c,
+            )
+        except Exception as e:
+            logger.warning(
+                "Spectrum: cache veto callback %r failed (%s); using actual forward",
+                veto,
+                e,
+            )
+            return False
+        if allowed is False:
+            return False
+    return True
+
+
+def _can_use_cached_prediction(
+    state: SpectrumState,
+    keys: Sequence[Hashable],
+    input_x: torch.Tensor,
+    timestep: torch.Tensor,
+    c,
+    old_wrapper,
+    model_options,
+    args,
+    valid_chunks: bool,
+) -> bool:
+    if state.mode != "cached" or not valid_chunks or not state.has_forecasters(keys):
+        return False
+    if state.compat_policy == "legacy":
+        return True
+    if not _wrapper_cache_safe(old_wrapper):
+        if state.verbose:
+            logger.info(
+                "Spectrum: compat_policy=%s blocks cached step because the "
+                "previous model_function_wrapper is not cache-safe",
+                state.compat_policy,
+            )
+        return False
+    if state.compat_policy == "strict" and not _uses_uuid_branch_keys(keys):
+        if state.verbose:
+            logger.info(
+                "Spectrum: compat_policy=strict blocks cached step because "
+                "conditioning UUID branch keys are unavailable"
+            )
+        return False
+    if state.step_idx >= state.num_steps:
+        if state.verbose:
+            logger.info(
+                "Spectrum: compat_policy=%s blocks cached step after expected "
+                "steps were exceeded (%d >= %d)",
+                state.compat_policy,
+                state.step_idx,
+                state.num_steps,
+            )
+        return False
+    if _spectrum_context_changed(state, input_x, keys):
+        if state.verbose:
+            logger.info(
+                "Spectrum: compat_policy=%s blocks cached step after latent "
+                "shape change",
+                state.compat_policy,
+            )
+        return False
+    return _passes_cache_vetoes(
+        state, args, keys, input_x, timestep, c, model_options
+    )
+
+
+def _update_forecasters_from_feature(
+    state: SpectrumState,
+    feat: Optional[torch.Tensor],
+    input_x: torch.Tensor,
+    keys: Sequence[Hashable],
+    valid_chunks: bool,
+    label: str,
+) -> None:
+    if not state.active or feat is None or not valid_chunks:
+        return
+    batch_chunks = len(keys)
+    if batch_chunks == 0 or feat.shape[0] % batch_chunks != 0:
+        if state.verbose:
+            logger.warning(
+                "%s: feature batch %d cannot be split into %d conditioning chunks; "
+                "skipping forecast update",
+                label,
+                feat.shape[0],
+                batch_chunks,
+            )
+        return
+
+    feat_chunks = feat.chunk(batch_chunks, dim=0)
+    if len(feat_chunks) != batch_chunks:
+        if state.verbose:
+            logger.warning(
+                "%s: feature batch %d produced %d chunks for %d conditioning keys; "
+                "skipping forecast update",
+                label,
+                feat.shape[0],
+                len(feat_chunks),
+                batch_chunks,
+            )
+        return
+
+    def _create_or_update() -> None:
+        for idx, key in enumerate(keys):
+            if key not in state.forecasters:
+                state.forecasters[key] = SpectrumPredictor(
+                    state.m_param,
+                    state.lam,
+                    state.w,
+                    feat.device,
+                    feat_chunks[idx].shape,
+                    state.num_steps,
+                    K=state.history_size,
+                )
+            state.forecasters[key].update(float(state.step_idx), feat_chunks[idx])
+
+    try:
+        _create_or_update()
+    except AssertionError:
+        if state.verbose:
+            logger.info("%s: feature shape changed; resetting forecasters", label)
+        state.clear_forecasters()
+        _create_or_update()
+    state.record_context(input_x, keys)
+
+
 class SpectrumState:
     def __init__(
         self,
@@ -131,6 +341,7 @@ class SpectrumState:
         sea_beta: float = 2.0,
         delta: Optional[float] = None,
         fsg_steps: Optional[frozenset] = None,
+        compat_policy: str = DEFAULT_COMPAT_POLICY,
     ):
         self.window_size = window_size
         self.flex_window = flex_window
@@ -143,6 +354,7 @@ class SpectrumState:
         self.history_size = history_size
         self.verbose = verbose
         self.one_sampler_only = one_sampler_only
+        self.compat_policy = _normalize_compat_policy(compat_policy)
 
         # SEA schedule (SeaCache decision metric). schedule="sea" replaces the
         # growing-window rule with accumulate-until-δ on the SEA-filtered latent.
@@ -176,10 +388,12 @@ class SpectrumState:
         # uncached (phase-2-only). Flipped True (with a reset) at the handoff.
         self.active = True
 
-        # Forecasters keyed by cond_or_uncond value (0=cond, 1=uncond)
-        self.forecasters: Dict[int, SpectrumPredictor] = {}
+        # Forecasters keyed by conditioning branch. Legacy paths can still use
+        # cond_or_uncond ints, but modern ComfyUI supplies per-conditioning UUIDs.
+        self.forecasters: Dict[Hashable, SpectrumPredictor] = {}
         self.captured_feat: Optional[torch.Tensor] = None
         self.patch_consumed = False
+        self.input_shape: Optional[tuple] = None
 
         # one_sampler_only: the ComfyUI prompt_id this state was last armed for.
         # The patched MODEL (and this state) is cached across workflow re-runs,
@@ -201,11 +415,19 @@ class SpectrumState:
         self.mode = "actual"
         self.curr_ws = self.window_size
         self.consec_cached = 0
-        self.forecasters = {}
+        self.clear_forecasters()
         self.captured_feat = None
         self.sea_accum = 0.0
         self.sea_prev = None
         self.sea_dists = []
+
+    def clear_forecasters(self) -> None:
+        self.forecasters = {}
+        self.input_shape = None
+
+    def record_context(self, input_x: torch.Tensor, keys: Sequence[Hashable]) -> None:
+        del keys
+        self.input_shape = tuple(input_x.shape[1:])
 
     def observe_sea(self, latent: torch.Tensor, sigma: float) -> None:
         """Accrue the SEA-filtered latent distance for the current step.
@@ -233,16 +455,16 @@ class SpectrumState:
                 self.sea_dists.append(d)
         self.sea_prev = sea_now
 
-    def _forecaster_ready(self, cou: int) -> bool:
-        forecaster = self.forecasters.get(cou)
+    def _forecaster_ready(self, key: Hashable) -> bool:
+        forecaster = self.forecasters.get(key)
         if forecaster is None:
             return False
         return forecaster.cheb.t_buf.numel() >= max(2, self.m_param + 2)
 
-    def forecasters_ready(self, cond_or_uncond: Sequence[int]) -> bool:
-        return all(self._forecaster_ready(cou) for cou in cond_or_uncond)
+    def forecasters_ready(self, keys: Sequence[Hashable]) -> bool:
+        return all(self._forecaster_ready(key) for key in keys)
 
-    def should_cache(self, cond_or_uncond: Optional[Sequence[int]] = None) -> bool:
+    def should_cache(self, keys: Optional[Sequence[Hashable]] = None) -> bool:
         if not self.active:
             return False
         if self.step_idx < self.warmup_steps:
@@ -252,7 +474,7 @@ class SpectrumState:
             return False
         if self.step_idx in self.fsg_steps:
             return False  # FSG-calibrated step — must run an actual forward
-        if cond_or_uncond is not None and not self.forecasters_ready(cond_or_uncond):
+        if keys is not None and not self.forecasters_ready(keys):
             return False
         if self.schedule == "sea" and self.delta is not None:
             # Refresh (actual) once the accumulated SEA distance crosses δ; cache
@@ -262,8 +484,8 @@ class SpectrumState:
         # Window schedule, or SEA calibration pass (δ uncalibrated) → window rule.
         return (self.consec_cached + 1) % max(1, math.floor(self.curr_ws)) != 0
 
-    def has_forecasters(self, cond_or_uncond: list) -> bool:
-        return all(cou in self.forecasters for cou in cond_or_uncond)
+    def has_forecasters(self, keys: Sequence[Hashable]) -> bool:
+        return all(key in self.forecasters for key in keys)
 
 
 def _capture_pre_hook(module, args):
@@ -467,6 +689,7 @@ def apply_dit_spectrum_patch(
     enabled: bool = True,
     verbose: bool = False,
     one_sampler_only: bool = False,
+    compat_policy: str = DEFAULT_COMPAT_POLICY,
 ):
     """Return a MODEL clone patched with DiT Spectrum feature forecasting only."""
     if not enabled:
@@ -493,6 +716,7 @@ def apply_dit_spectrum_patch(
         history_size=history_size,
         verbose=verbose,
         one_sampler_only=one_sampler_only,
+        compat_policy=compat_policy,
     )
 
     _ensure_capture_hook(dit)
@@ -535,6 +759,11 @@ def apply_dit_spectrum_patch(
         live_dit.final_layer._spectrum_state = state
 
         cond_or_uncond, valid_chunks = _normalize_cond_or_uncond(args, input_x.shape[0])
+        keys = _spectrum_batch_keys(c, cond_or_uncond)
+        if state.compat_policy != "legacy" and _spectrum_context_changed(
+            state, input_x, keys
+        ):
+            state.clear_forecasters()
         sigma_val = timestep.flatten()[0].item()
         new_step = _advance_spectrum_state(state, sigma_val)
         if state.patch_consumed:
@@ -544,7 +773,7 @@ def apply_dit_spectrum_patch(
         if new_step:
             state.mode = (
                 "cached"
-                if valid_chunks and state.should_cache(cond_or_uncond)
+                if valid_chunks and state.should_cache(keys)
                 else "actual"
             )
             if state.verbose:
@@ -556,15 +785,21 @@ def apply_dit_spectrum_patch(
                     state.mode,
                 )
 
-        if (
-            state.mode == "cached"
-            and valid_chunks
-            and state.has_forecasters(cond_or_uncond)
+        if _can_use_cached_prediction(
+            state,
+            keys,
+            input_x,
+            timestep,
+            c,
+            old_wrapper,
+            m.model_options,
+            args,
+            valid_chunks,
         ):
             predictions = []
-            for cou in cond_or_uncond:
+            for key in keys:
                 predictions.append(
-                    state.forecasters[cou].predict(float(state.step_idx))
+                    state.forecasters[key].predict(float(state.step_idx))
                 )
 
             batched_feat = torch.cat(predictions, dim=0)
@@ -582,54 +817,10 @@ def apply_dit_spectrum_patch(
         result = actual_forward(apply_model, args, input_x, timestep, c)
 
         feat = state.captured_feat
-        if feat is not None and valid_chunks:
-            batch_chunks = len(cond_or_uncond)
-            feat_chunks = feat.chunk(batch_chunks, dim=0)
-            if len(feat_chunks) != batch_chunks:
-                if state.verbose:
-                    logger.warning(
-                        "DiT Spectrum Patch: feature batch %d cannot be split "
-                        "into %d cond/uncond chunks; skipping forecast update",
-                        feat.shape[0],
-                        batch_chunks,
-                    )
-                return result
-
-            try:
-                for idx, cou in enumerate(cond_or_uncond):
-                    if cou not in state.forecasters:
-                        state.forecasters[cou] = SpectrumPredictor(
-                            state.m_param,
-                            state.lam,
-                            state.w,
-                            feat.device,
-                            feat_chunks[idx].shape,
-                            state.num_steps,
-                            K=state.history_size,
-                        )
-                    state.forecasters[cou].update(
-                        float(state.step_idx), feat_chunks[idx]
-                    )
-            except AssertionError:
-                if state.verbose:
-                    logger.info(
-                        "DiT Spectrum Patch: feature shape changed; resetting state"
-                    )
-                state.forecasters = {}
-                for idx, cou in enumerate(cond_or_uncond):
-                    state.forecasters[cou] = SpectrumPredictor(
-                        state.m_param,
-                        state.lam,
-                        state.w,
-                        feat.device,
-                        feat_chunks[idx].shape,
-                        state.num_steps,
-                        K=state.history_size,
-                    )
-                    state.forecasters[cou].update(
-                        float(state.step_idx), feat_chunks[idx]
-                    )
-        elif state.verbose and not valid_chunks:
+        _update_forecasters_from_feature(
+            state, feat, input_x, keys, valid_chunks, "DiT Spectrum Patch"
+        )
+        if state.verbose and not valid_chunks:
             logger.warning(
                 "DiT Spectrum Patch: cond_or_uncond=%s does not divide batch=%d; "
                 "running actual forward without forecast update",
@@ -682,6 +873,7 @@ def spectrum_sample(
     fsg_k: int = 3,
     fsg_d_sigma: float = 0.1,
     fsg_gamma: float = 0.0,
+    compat_policy: str = DEFAULT_COMPAT_POLICY,
 ):
     """Shared Spectrum sampling logic used by all node tiers.
 
@@ -736,13 +928,22 @@ def spectrum_sample(
         fsg_gamma=0 → use the CFG scale (=guidance); keep ≈4 even under CFG++
         (matching it to the CFG++ effective weight diverges).
     """
+    compat_policy = _normalize_compat_policy(compat_policy)
     m = model.clone()
 
     # SMC-CFG: replace the CFG combine before any sampler call. Alpha=0 is
     # the universal off-switch; CFG=1 also short-circuits since there is no
     # cond/uncond residual to slide on.
     if smc_cfg_alpha > 0.0 and not math.isclose(cfg, 1.0):
-        install_smc_cfg(m, alpha=smc_cfg_alpha, lam=smc_cfg_lambda)
+        has_external_cfg = m.model_options.get("sampler_cfg_function") is not None
+        if compat_policy != "legacy" and has_external_cfg:
+            logger.warning(
+                "Spectrum: compat_policy=%s found an existing sampler_cfg_function; "
+                "skipping SMC-CFG so it is not overwritten.",
+                compat_policy,
+            )
+        else:
+            install_smc_cfg(m, alpha=smc_cfg_alpha, lam=smc_cfg_lambda)
 
     # Auto mode: load + setup the calibrator. If anything fails, fall back to
     # manual semantics (dcw_lambda × schedule) — never hard-error mid-sample.
@@ -903,6 +1104,7 @@ def spectrum_sample(
         sea_beta=sea_beta,
         delta=sea_delta,
         fsg_steps=fsg_steps,
+        compat_policy=compat_policy,
     )
 
     dit = m.model.diffusion_model
@@ -921,9 +1123,16 @@ def spectrum_sample(
         input_x = args["input"]
         timestep = args["timestep"]
         c = args["c"]
-        cond_or_uncond = args["cond_or_uncond"]
+        cond_or_uncond, valid_chunks = _normalize_cond_or_uncond(
+            args, input_x.shape[0]
+        )
+        keys = _spectrum_batch_keys(c, cond_or_uncond)
+        if state.compat_policy != "legacy" and _spectrum_context_changed(
+            state, input_x, keys
+        ):
+            state.clear_forecasters()
 
-        sigma_val = timestep[0].item()
+        sigma_val = timestep.flatten()[0].item()
 
         if state.last_sigma is None or abs(sigma_val - state.last_sigma) > 1e-8:
             if state.step_idx >= 0:
@@ -941,12 +1150,24 @@ def spectrum_sample(
             state.last_sigma = sigma_val
             # Accrue the SEA distance on this step's x_t before the cache decision.
             state.observe_sea(input_x, sigma_val)
-            state.mode = "cached" if state.should_cache() else "actual"
+            state.mode = (
+                "cached" if valid_chunks and state.should_cache(keys) else "actual"
+            )
 
-        if state.mode == "cached" and state.has_forecasters(cond_or_uncond):
+        if _can_use_cached_prediction(
+            state,
+            keys,
+            input_x,
+            timestep,
+            c,
+            old_wrapper,
+            m.model_options,
+            args,
+            valid_chunks,
+        ):
             predictions = []
-            for cou in cond_or_uncond:
-                pred_feat = state.forecasters[cou].predict(float(state.step_idx))
+            for key in keys:
+                pred_feat = state.forecasters[key].predict(float(state.step_idx))
                 predictions.append(pred_feat)
 
             batched_feat = torch.cat(predictions, dim=0)
@@ -957,6 +1178,7 @@ def spectrum_sample(
             )
 
         state.mode = "actual"
+        state.captured_feat = None
 
         if old_wrapper is not None:
             result = old_wrapper(apply_model, args)
@@ -964,20 +1186,16 @@ def spectrum_sample(
             result = apply_model(input_x, timestep, **c)
 
         feat = state.captured_feat
-        if state.active and feat is not None:
-            batch_chunks = len(cond_or_uncond)
-            feat_chunks = feat.chunk(batch_chunks, dim=0)
-            for idx, cou in enumerate(cond_or_uncond):
-                if cou not in state.forecasters:
-                    state.forecasters[cou] = SpectrumPredictor(
-                        state.m_param,
-                        state.lam,
-                        state.w,
-                        feat.device,
-                        feat_chunks[idx].shape,
-                        state.num_steps,
-                    )
-                state.forecasters[cou].update(float(state.step_idx), feat_chunks[idx])
+        _update_forecasters_from_feature(
+            state, feat, input_x, keys, valid_chunks, "Spectrum"
+        )
+        if state.verbose and not valid_chunks:
+            logger.warning(
+                "Spectrum: cond_or_uncond=%s does not divide batch=%d; running "
+                "actual forward without forecast update",
+                cond_or_uncond,
+                input_x.shape[0],
+            )
 
         return result
 

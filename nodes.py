@@ -9,7 +9,7 @@ import comfy.utils
 import folder_paths
 
 from .mod_guidance import AUTO_ADAPTER_SENTINEL, setup_mod_guidance
-from .spectrum import apply_dit_spectrum_patch, spectrum_sample
+from .spectrum import COMPAT_POLICIES, apply_dit_spectrum_patch, spectrum_sample
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +281,19 @@ _SPECTRUM_DEFAULTS = dict(
     blend_w=0.3,
     cheby_degree=3,
     ridge_lambda=0.1,
+)
+
+_COMPAT_POLICY_INPUT = (
+    list(COMPAT_POLICIES),
+    {
+        "default": "legacy",
+        "tooltip": (
+            "Spectrum cache compatibility policy. 'legacy' keeps existing cached "
+            "step behavior. 'conservative' falls back to actual DiT forwards "
+            "when wrapper, shape, key, step, or veto checks are unsafe. 'strict' "
+            "also requires ComfyUI conditioning UUID branch keys."
+        ),
+    },
 )
 
 # SPD / SPEED: multi-resolution progressive diffusion composed with Spectrum
@@ -1208,6 +1221,59 @@ class DiTSpectrumPatch:
         return (patched,)
 
 
+class DiTSpectrumPatchAdvanced(DiTSpectrumPatch):
+    """Standalone DiT Spectrum MODEL patcher with compatibility controls."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        inputs = DiTSpectrumPatch.INPUT_TYPES()
+        inputs["required"]["compat_policy"] = _COMPAT_POLICY_INPUT
+        return inputs
+
+    DESCRIPTION = (
+        "Standalone DiT Spectrum model patch with compatibility controls. "
+        "Use 'legacy' for existing behavior, or 'conservative'/'strict' when "
+        "multi-positive conditioning, chained model wrappers, Custom Sampler "
+        "flows, or cache veto callbacks should fall back to actual DiT forwards "
+        "instead of using uncertain cached predictions."
+    )
+
+    def patch(
+        self,
+        model,
+        steps=30,
+        window_size=2.0,
+        flex_window=0.25,
+        warmup_steps=6,
+        tail_actual_steps=3,
+        blend_w=0.3,
+        cheby_degree=3,
+        ridge_lambda=0.1,
+        history_size=100,
+        enabled=True,
+        one_sampler_only=False,
+        verbose=False,
+        compat_policy="legacy",
+    ):
+        patched = apply_dit_spectrum_patch(
+            model,
+            steps=steps,
+            window_size=window_size,
+            flex_window=flex_window,
+            warmup_steps=warmup_steps,
+            tail_actual_steps=tail_actual_steps,
+            blend_w=blend_w,
+            cheby_degree=cheby_degree,
+            ridge_lambda=ridge_lambda,
+            history_size=history_size,
+            enabled=enabled,
+            one_sampler_only=one_sampler_only,
+            verbose=verbose,
+            compat_policy=compat_policy,
+        )
+        return (patched,)
+
+
 class SpectrumSPDKSampler:
     """KSampler (Spectrum + SPD) — the SPEED sampler.
 
@@ -1409,6 +1475,7 @@ NODE_CLASS_MAPPINGS = {
     "SpectrumSPDLoRAKSampler": SpectrumSPDLoRAKSampler,
     "AnimaModGuidance": AnimaModGuidance,
     "DiTSpectrumPatch": DiTSpectrumPatch,
+    "DiTSpectrumPatchAdvanced": DiTSpectrumPatchAdvanced,
     # Deprecated aliases — the mod-guidance + SEA samplers are now folded into
     # the unified SpectrumKSampler (mod_w_profile + refresh_ratio dials). These
     # keys are kept so saved workflows referencing them still load; they are
@@ -1425,4 +1492,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SpectrumSPDLoRAKSampler": "KSampler (SPD LoRA / auto-schedule)",
     "AnimaModGuidance": "Anima Mod Guidance (model patch)",
     "DiTSpectrumPatch": "DiT Spectrum Patch",
+    "DiTSpectrumPatchAdvanced": "DiT Spectrum Patch Advanced",
 }
