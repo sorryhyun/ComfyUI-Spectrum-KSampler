@@ -288,10 +288,12 @@ _COMPAT_POLICY_INPUT = (
     {
         "default": "legacy",
         "tooltip": (
-            "Spectrum cache compatibility policy. 'legacy' keeps existing cached "
-            "step behavior. 'conservative' falls back to actual DiT forwards "
-            "when wrapper, shape, key, step, or veto checks are unsafe. 'strict' "
-            "also requires ComfyUI conditioning UUID branch keys."
+            "How safely Spectrum is allowed to skip DiT blocks. 'legacy' is the "
+            "fastest old behavior. 'conservative' runs an actual DiT forward "
+            "instead of a cached prediction when wrappers, latent shape, step "
+            "count, or veto checks look unsafe. 'strict' is the safest choice "
+            "for exact artist/multi-conditioning mixes: it also requires "
+            "ComfyUI per-conditioning UUIDs before caching."
         ),
     },
 )

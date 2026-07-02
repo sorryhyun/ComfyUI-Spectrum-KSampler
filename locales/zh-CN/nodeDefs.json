@@ -381,7 +381,7 @@
         "tooltip": "将 actual/cached step 判定输出到 log。"
       },
       "compat_policy": {
-        "tooltip": "Spectrum cache compatibility policy。legacy 保持既有行为，conservative/strict 会把不确定的 cached step fallback 到 actual forward。"
+        "tooltip": "Spectrum 是否可 skip DiT block 的安全标准。legacy 是最快的既有行为；conservative 会在 wrapper/shape/step/veto 不安全时改用 actual forward；strict 适合 exact artist mix 或 multi-conditioning，只有 UUID 可用时才允许 cache。"
       }
     }
   }

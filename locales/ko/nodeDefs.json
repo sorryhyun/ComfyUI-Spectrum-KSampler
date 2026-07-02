@@ -381,7 +381,7 @@
         "tooltip": "actual/cached step 결정을 로그로 출력합니다."
       },
       "compat_policy": {
-        "tooltip": "Spectrum cache 호환성 정책입니다. legacy는 기존 동작을 유지하고 conservative/strict는 불확실한 cached step을 actual forward로 되돌립니다."
+        "tooltip": "Spectrum이 DiT block을 건너뛰는 안전 기준입니다. legacy는 가장 빠른 기존 방식, conservative는 wrapper/shape/step/veto가 불안전하면 actual forward로 대체, strict는 exact artist mix나 multi-conditioning용으로 UUID가 있을 때만 cache를 허용합니다."
       }
     }
   }

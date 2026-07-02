@@ -9,6 +9,7 @@ Tuned for the [Anima](https://github.com/sorryhyun/anima_lora) DiT — its modul
 - [How it works](#how-it-works) — Chebyshev forecasting, adaptive window schedule, SEA scheduling
 - [Usage](#usage) — node placement, sampler compatibility
   - [Standalone MODEL patcher](#standalone-model-patcher) — wire Spectrum before stock samplers
+  - [DiT Spectrum Patch Advanced](#dit-spectrum-patch-advanced) — safer cache policy for complex sampler flows
 - [Parameters](#parameters) — Spectrum knobs + tuning tips
 - [Modulation guidance](#modulation-guidance) — AdaLN-side quality steering via `pooled_text_proj`
 - [SMC-CFG (α-adaptive sliding-mode CFG)](#smc-cfg-α-adaptive-sliding-mode-cfg) — velocity-space CFG combine modification
@@ -69,6 +70,38 @@ Set `steps` on **DiT Spectrum Patch** to the same value as the downstream sample
 
 Use `enabled = false` to pass the input model through unchanged. If the same patched MODEL is connected to multiple sampler nodes, Spectrum applies to every sampler that consumes that MODEL output. Set `one_sampler_only = true` when the patch should apply only to the first sampler run; later sampler runs *within the same workflow run* (e.g. a hi-res-fix second pass) using the same patched MODEL pass through without Spectrum. This re-arms automatically on each new workflow execution, so re-queuing the graph applies Spectrum again. Non-DiT models fail with a clear error rather than silently producing invalid output.
 
+### DiT Spectrum Patch Advanced
+
+The **DiT Spectrum Patch Advanced** node is the same `MODEL -> MODEL` patcher with one extra control: `compat_policy`. Use it when the downstream sampler path is more complex than a single positive / single negative KSampler, for example:
+
+- multi-positive conditioning
+- exact artist-mix conditioning
+- regional or masked conditioning
+- Custom Sampler graphs
+- chained model wrappers that may need to run on every model call
+
+The node does not change sockets, conditioning data, sampling steps, or CFG math. It only decides whether a Spectrum step is allowed to use the fast cached prediction path. If the selected policy says the cache is unsafe, that step falls back to an actual DiT forward. Quality is protected by giving up speed for that branch or step.
+
+For exact artist mixes, prefer:
+
+```
+MODEL -> DiT Spectrum Patch Advanced -> KSampler / KSampler Advanced / Custom Sampler
+Artist Mixer exact positive -> sampler positive
+negative -> sampler negative
+```
+
+Set the patcher's `steps` to the downstream sampler's `steps`, then start with `compat_policy = strict`. If you only need the old fastest behavior, use `legacy`. For a balanced default on wrapper-heavy but UUID-capable graphs, use `conservative`.
+
+#### compat_policy modes
+
+| Mode | Use when | Cached prediction is allowed when |
+|------|----------|-----------------------------------|
+| `legacy` | You want the original fastest Spectrum behavior and backwards-compatible saved workflows. | The normal Spectrum schedule says the step can be cached. Existing wrappers may be bypassed on cached steps, matching the old behavior. |
+| `conservative` | You want safer behavior with custom samplers, shape changes, wrapper chains, or cache veto callbacks. | The normal Spectrum schedule allows caching and the runtime checks pass: valid batch split, matching latent shape, expected step count, no unsafe wrapper, and no veto callback blocking cache. Otherwise the step runs actual DiT forward. |
+| `strict` | You are using exact artist mixes, multi-positive conditioning, or other flows where each conditioning branch must keep its own forecaster history. | Everything required by `conservative`, plus ComfyUI per-conditioning UUID branch keys must be available. If UUIDs are missing, it runs actual DiT forward instead of sharing a coarse cond/uncond cache. |
+
+Why this matters: Spectrum forecasts DiT features from previous actual steps. In a simple prompt there is usually one positive branch and one negative branch. In exact artist mix, each artist is a separate positive conditioning branch. `strict` keeps those branch histories separate by requiring ComfyUI UUID keys before caching; without them, it avoids cached predictions rather than mixing unrelated artist trajectories.
+
 ## Parameters
 
 | Parameter | Default | Description |
@@ -90,6 +123,12 @@ Additional **DiT Spectrum Patch** parameters:
 | `enabled` | true | `false` returns the input MODEL unchanged |
 | `one_sampler_only` | false | Apply Spectrum only to the first sampler run that uses this patched MODEL |
 | `verbose` | false | Logs actual/cached step decisions |
+
+Additional **DiT Spectrum Patch Advanced** parameter:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `compat_policy` | `legacy` | Cache-safety mode. `legacy` keeps the original fastest behavior. `conservative` uses cached predictions only when runtime checks say the step is safe. `strict` additionally requires ComfyUI per-conditioning UUIDs, which is the recommended mode for exact artist mixes and multi-positive conditioning. |
 
 ### Tuning tips
 
