@@ -1,0 +1,388 @@
+{
+  "SpectrumKSampler": {
+    "description": "可作为标准 KSampler 替代的 Spectrum 加速 sampler。整合 Chebyshev feature forecasting、SEA skip scheduling、optional mod guidance 和 SMC-CFG。",
+    "inputs": {
+      "model": {
+        "tooltip": "denoising 使用的 MODEL。"
+      },
+      "seed": {
+        "tooltip": "生成 noise 使用的 seed。"
+      },
+      "steps": {
+        "tooltip": "sampling step 数。"
+      },
+      "cfg": {
+        "tooltip": "Classifier-Free Guidance scale。"
+      },
+      "sampler_name": {
+        "tooltip": "要使用的 sampler algorithm。"
+      },
+      "scheduler": {
+        "tooltip": "noise sigma schedule。"
+      },
+      "positive": {
+        "tooltip": "positive conditioning。"
+      },
+      "negative": {
+        "tooltip": "negative conditioning。"
+      },
+      "latent_image": {
+        "tooltip": "开始 sampling 的 latent。"
+      },
+      "denoise": {
+        "tooltip": "denoise 强度。1.0 表示完整 denoise。"
+      },
+      "quality_tags": {
+        "tooltip": "mod guidance 向质量方向 steering 时使用的 positive quality tag。"
+      },
+      "quality_neg": {
+        "tooltip": "quality steering axis 的 negative baseline。留空时复用 CFG negative。"
+      },
+      "mod_w_profile": {
+        "tooltip": "per-block modulation guidance preset。off 会停用 mod guidance。"
+      },
+      "refresh_ratio": {
+        "tooltip": "SEA skip scheduling dial。-1 为 window，0 为 auto，正值为明确 refresh ratio。"
+      },
+      "adaptive_smc_alpha": {
+        "tooltip": "SMC-CFG alpha gain。0 会使用普通 CFG combine。"
+      },
+      "fsg": {
+        "tooltip": "启用 validated CFG++/FSG stack。CFG 不为 1 时使用，且不与 SMC-CFG 同时使用。"
+      },
+      "clip": {
+        "tooltip": "encode quality tag 的 CLIP。使用 mod guidance 时连接。"
+      }
+    }
+  },
+  "SpectrumKSamplerAdvanced": {
+    "description": "Spectrum 加速 sampler 的 advanced 版本。可直接调整 mod guidance、forecasting、DCW、FSG、SMC-CFG 细节参数。",
+    "inputs": {
+      "model": {
+        "tooltip": "denoising 使用的 MODEL。"
+      },
+      "clip": {
+        "tooltip": "encode quality tag 和 DCW auto calibrator input 的 CLIP。"
+      },
+      "seed": {
+        "tooltip": "生成 noise 使用的 seed。"
+      },
+      "steps": {
+        "tooltip": "sampling step 数。"
+      },
+      "cfg": {
+        "tooltip": "Classifier-Free Guidance scale。"
+      },
+      "sampler_name": {
+        "tooltip": "要使用的 sampler algorithm。"
+      },
+      "scheduler": {
+        "tooltip": "noise sigma schedule。"
+      },
+      "positive": {
+        "tooltip": "positive conditioning。"
+      },
+      "negative": {
+        "tooltip": "negative conditioning。"
+      },
+      "latent_image": {
+        "tooltip": "开始 sampling 的 latent。"
+      },
+      "denoise": {
+        "tooltip": "denoise 强度。1.0 表示完整 denoise。"
+      },
+      "adapter": {
+        "tooltip": "mod guidance 用 pooled_text_proj adapter。auto 项目会在首次运行时下载默认 weight。"
+      },
+      "quality_tags": {
+        "tooltip": "mod guidance 向质量方向 steering 时使用的 positive quality tag。"
+      },
+      "quality_neg": {
+        "tooltip": "quality steering axis 的 negative baseline。留空时复用 CFG negative。"
+      },
+      "mod_w": {
+        "tooltip": "per-block modulation guidance 的 peak strength。"
+      },
+      "mod_start_layer": {
+        "tooltip": "开始应用 steering delta 的 block index。"
+      },
+      "mod_end_layer": {
+        "tooltip": "停止应用 steering delta 的 exclusive end block index。-1 表示剩余所有 block。"
+      },
+      "mod_taper": {
+        "tooltip": "最后几个 slot 要应用 taper_scale 的数量。"
+      },
+      "mod_taper_scale": {
+        "tooltip": "taper 区间要乘上的倍率。"
+      },
+      "mod_final_w": {
+        "tooltip": "final layer 应用的 guidance strength。默认 0.0 不改动 output head。"
+      },
+      "window_size": {
+        "tooltip": "初始 Spectrum caching window。"
+      },
+      "flex_window": {
+        "tooltip": "actual forward 后增加 window size 的值。"
+      },
+      "warmup_steps": {
+        "tooltip": "开头必定运行 actual forward 的 step 数。"
+      },
+      "blend_w": {
+        "tooltip": "Chebyshev prediction 和 Taylor interpolation 的 blend ratio。1.0 为纯 Chebyshev。"
+      },
+      "cheby_degree": {
+        "tooltip": "Chebyshev basis 数量。"
+      },
+      "ridge_lambda": {
+        "tooltip": "ridge regression regularization strength。"
+      },
+      "dcw_mode": {
+        "tooltip": "DCW correction mode。可选 off/manual/auto。"
+      },
+      "dcw_lambda": {
+        "tooltip": "manual DCW post-step bias correction strength。"
+      },
+      "dcw_band_mask": {
+        "tooltip": "应用 DCW correction 的 Haar subband 范围。"
+      },
+      "dcw_calibrator": {
+        "tooltip": "DCW auto mode 使用的 fusion-head safetensors artifact。"
+      },
+      "cfgpp_lambda": {
+        "tooltip": "CFG++ substrate strength。0 表示普通 CFG。"
+      },
+      "fsg": {
+        "tooltip": "启用 Foresight Guidance。每个 in-band step 需要额外 forward。"
+      },
+      "fsg_band_lo": {
+        "tooltip": "FSG 运行的 sigma band 下限。"
+      },
+      "fsg_band_hi": {
+        "tooltip": "FSG 运行的 sigma band 上限。"
+      },
+      "fsg_k": {
+        "tooltip": "每个 in-band step 运行的 FSG fixed-point iteration 次数。"
+      },
+      "fsg_d_sigma": {
+        "tooltip": "FSG forward-backward stride delta sigma。"
+      },
+      "fsg_gamma": {
+        "tooltip": "FSG calibration guidance gamma。0 表示使用 CFG scale。"
+      },
+      "adaptive_smc_alpha": {
+        "tooltip": "SMC-CFG alpha gain。0 会使用普通 CFG combine。"
+      },
+      "smc_cfg_lambda": {
+        "tooltip": "SMC-CFG sliding-manifold slope lambda。"
+      }
+    }
+  },
+  "SpectrumSPDKSampler": {
+    "description": "结合 Spectrum 和 SPD/SPEED 的 sampler。low-res prefix 后扩展到 full-res，并由 Spectrum 预测 tail。",
+    "inputs": {
+      "model": {
+        "tooltip": "denoising 使用的 MODEL。"
+      },
+      "seed": {
+        "tooltip": "生成 noise 使用的 seed。"
+      },
+      "steps": {
+        "tooltip": "sampling step 数。"
+      },
+      "cfg": {
+        "tooltip": "Classifier-Free Guidance scale。"
+      },
+      "sampler_name": {
+        "tooltip": "要使用的 sampler algorithm。"
+      },
+      "scheduler": {
+        "tooltip": "noise sigma schedule。"
+      },
+      "positive": {
+        "tooltip": "positive conditioning。"
+      },
+      "negative": {
+        "tooltip": "negative conditioning。"
+      },
+      "latent_image": {
+        "tooltip": "开始 sampling 的 latent。"
+      },
+      "denoise": {
+        "tooltip": "denoise 强度。1.0 表示完整 denoise。"
+      },
+      "split_mode": {
+        "tooltip": "SPD resolution schedule mode。目前使用 single handoff。"
+      },
+      "spd_scale": {
+        "tooltip": "low-res phase 使用的 latent resolution scale。"
+      },
+      "spd_sigma": {
+        "tooltip": "从 low-res 切换到 full-res 的 sigma 值。"
+      },
+      "adaptive_smc_alpha": {
+        "tooltip": "SMC-CFG alpha gain。0 会使用普通 CFG combine。"
+      }
+    }
+  },
+  "SpectrumSPDLoRAKSampler": {
+    "description": "将 SPD-trained LoRA 应用到 MODEL，并从 adapter metadata 自动读取 SPEED schedule 后 sampling。",
+    "inputs": {
+      "model": {
+        "tooltip": "应用 LoRA 并用于 denoising 的 MODEL。"
+      },
+      "seed": {
+        "tooltip": "生成 noise 使用的 seed。"
+      },
+      "steps": {
+        "tooltip": "sampling step 数。"
+      },
+      "cfg": {
+        "tooltip": "Classifier-Free Guidance scale。"
+      },
+      "sampler_name": {
+        "tooltip": "要使用的 sampler algorithm。"
+      },
+      "scheduler": {
+        "tooltip": "noise sigma schedule。"
+      },
+      "positive": {
+        "tooltip": "positive conditioning。"
+      },
+      "negative": {
+        "tooltip": "negative conditioning。"
+      },
+      "latent_image": {
+        "tooltip": "开始 sampling 的 latent。"
+      },
+      "denoise": {
+        "tooltip": "denoise 强度。1.0 表示完整 denoise。"
+      },
+      "lora_name": {
+        "tooltip": "包含 SPD schedule metadata 的 LoRA。没有 metadata 时 fallback 到默认 handoff 值。"
+      },
+      "lora_strength": {
+        "tooltip": "应用到 MODEL 的 LoRA strength。"
+      },
+      "adaptive_smc_alpha": {
+        "tooltip": "SMC-CFG alpha gain。0 会使用普通 CFG combine。"
+      }
+    }
+  },
+  "AnimaModGuidance": {
+    "description": "将 modulation guidance 作为 standalone MODEL patcher 应用。输出 MODEL 可连接到普通 sampler、Spectrum 或 SPEED 前方。",
+    "inputs": {
+      "model": {
+        "tooltip": "要应用 mod guidance 的 MODEL。"
+      },
+      "clip": {
+        "tooltip": "encode quality tag 的 CLIP。"
+      },
+      "quality_tags": {
+        "tooltip": "用于 steer generation 的 positive quality tag。"
+      },
+      "quality_neg": {
+        "tooltip": "quality steering axis 的 negative baseline。留空时复用 CFG negative。"
+      },
+      "mod_w_profile": {
+        "tooltip": "per-block modulation guidance preset。off 会让 MODEL 原样通过。"
+      },
+      "positive": {
+        "tooltip": "计算 steering delta 使用的 positive conditioning。"
+      },
+      "negative": {
+        "tooltip": "计算 steering delta 使用的 negative conditioning。"
+      }
+    }
+  },
+  "DiTSpectrumPatch": {
+    "description": "standalone DiT Spectrum MODEL patcher。接在普通 KSampler 或 Custom Sampler 前，只应用 final_layer 前的 feature forecasting。",
+    "inputs": {
+      "model": {
+        "tooltip": "要应用 Spectrum 的 DiT MODEL。"
+      },
+      "steps": {
+        "tooltip": "必须与 downstream sampler 的 step 数一致。"
+      },
+      "window_size": {
+        "tooltip": "初始 caching window。1.0 实际上会停用 cached step。"
+      },
+      "flex_window": {
+        "tooltip": "actual forward 后增加 window size 的值。"
+      },
+      "warmup_steps": {
+        "tooltip": "开头必定运行 actual DiT forward 的 step 数。"
+      },
+      "tail_actual_steps": {
+        "tooltip": "最后必定运行 actual DiT forward 的 step 数。"
+      },
+      "blend_w": {
+        "tooltip": "Chebyshev prediction 和 Taylor interpolation 的 blend ratio。1.0 为纯 Chebyshev。"
+      },
+      "cheby_degree": {
+        "tooltip": "Chebyshev polynomial degree。"
+      },
+      "ridge_lambda": {
+        "tooltip": "ridge regression regularization strength。"
+      },
+      "history_size": {
+        "tooltip": "forecaster 保留的 observation history buffer 大小。"
+      },
+      "enabled": {
+        "tooltip": "关闭时直接返回输入 MODEL。"
+      },
+      "one_sampler_only": {
+        "tooltip": "启用后，只对使用此 patched MODEL 的第一个 sampler run 应用 Spectrum，同一 workflow 的后续 sampler run 会直接通过。"
+      },
+      "verbose": {
+        "tooltip": "将 actual/cached step 判定输出到 log。"
+      }
+    }
+  },
+  "DiTSpectrumPatchAdvanced": {
+    "description": "带有兼容性控制的 standalone DiT Spectrum MODEL patcher。可将不确定的 cached prediction fallback 到 actual DiT forward。",
+    "inputs": {
+      "model": {
+        "tooltip": "要应用 Spectrum 的 DiT MODEL。"
+      },
+      "steps": {
+        "tooltip": "必须与 downstream sampler 的 step 数一致。"
+      },
+      "window_size": {
+        "tooltip": "初始 caching window。1.0 实际上会停用 cached step。"
+      },
+      "flex_window": {
+        "tooltip": "actual forward 后增加 window size 的值。"
+      },
+      "warmup_steps": {
+        "tooltip": "开头必定运行 actual DiT forward 的 step 数。"
+      },
+      "tail_actual_steps": {
+        "tooltip": "最后必定运行 actual DiT forward 的 step 数。"
+      },
+      "blend_w": {
+        "tooltip": "Chebyshev prediction 和 Taylor interpolation 的 blend ratio。1.0 为纯 Chebyshev。"
+      },
+      "cheby_degree": {
+        "tooltip": "Chebyshev polynomial degree。"
+      },
+      "ridge_lambda": {
+        "tooltip": "ridge regression regularization strength。"
+      },
+      "history_size": {
+        "tooltip": "forecaster 保留的 observation history buffer 大小。"
+      },
+      "enabled": {
+        "tooltip": "关闭时直接返回输入 MODEL。"
+      },
+      "one_sampler_only": {
+        "tooltip": "启用后，只对使用此 patched MODEL 的第一个 sampler run 应用 Spectrum，同一 workflow 的后续 sampler run 会直接通过。"
+      },
+      "verbose": {
+        "tooltip": "将 actual/cached step 判定输出到 log。"
+      },
+      "compat_policy": {
+        "tooltip": "Spectrum cache compatibility policy。legacy 保持既有行为，conservative/strict 会把不确定的 cached step fallback 到 actual forward。"
+      }
+    }
+  }
+}
