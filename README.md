@@ -133,44 +133,16 @@ The original **KSampler (Spectrum for MOSS)** above remains the option for the c
 
 ### MODEL patch for ComfyUI's built-in Krea2 loader (experimental)
 
-**Spectrum Model Patch (Krea2)** uses the same forecasting and per-sampler
-state management as the MOSS MODEL patch. Only model identification, feature
-capture and output-head reconstruction are Krea2-specific:
+Use **Spectrum Model Patch (Krea2)** for ComfyUI's built-in Krea2 loader:
 
 ```text
 ComfyUI Krea2 MODEL -> Spectrum Model Patch (Krea2) -> KSampler / Custom Sampler
 ```
 
-This is experimental forecast acceleration, initially exercised with the INT8
-Turbo checkpoint and its unquantized output head. The adapter accepts ComfyUI's
-Krea2 architecture without detecting checkpoint names or restricting it to
-Turbo. Defaults are **Turbo starting values**: eight steps, degree 1, three
-warmup steps, two final actual steps and eight history entries.
-
-For **RAW**, supply the sampler steps, CFG and flow shift appropriate to that
-checkpoint. The patch follows the actual sigma schedule, including a 52-step
-RAW-style schedule, and keeps conditional/unconditional forecasts separate.
-The `steps` compatibility input does not override the downstream schedule.
-RAW-style schedule and branch behavior are covered by CPU tests; actual RAW
-checkpoint image quality has not been validated. Short Turbo schedules can
-leave little or no room for acceleration. Compare with `enabled=false` for your
-prompts and resolutions. The patch does not add trained Mod Guidance, SPD or
-compilation.
-
-Reference-image conditioning, multiple temporal frames, post-input token patches
-and activation-quantized output heads use full computation. The common runner
-also preserves the MOSS patch's ControlNet and scheduled-hook handling and the
-existing Spectrum cache policy. APPLY_MODEL/DIFFUSION_MODEL wrappers, including
-block compilation, do not require registration to forecast. Capture uses a
-temporary pre-hook on the live output head, removed after each actual forward.
-Each Highres pass, Detailer cycle and USDU tile gets fresh forecast state.
-
-The public node ID is `SpectrumKrea2ModelPatch`; `NativeKrea2SpectrumPatch`
-remains a deprecated compatibility alias for earlier workflows. Python callers
-can use `model_patch_krea2.apply_krea2_model_patch`; the earlier
-`krea2.apply_krea2_spectrum_patch` import remains an alias. The Krea2 architecture
-is imported only when used, so the original nodes remain loadable on ComfyUI
-versions without Krea2 support.
+It preserves sampling, CFG and flow shift, using fresh forecast state for each sampler invocation. The patch's `steps` input is ignored in favor of the actual sampler schedule.
+Defaults are **Turbo starting values**: degree 1, warmup 3, tail 2, history 8. For **RAW**, set checkpoint-appropriate steps, CFG and shift on the downstream sampler; actual RAW checkpoint quality remains unverified.
+ControlNet, scheduled weight hooks, reference images, multiple temporal frames, post-input token patches and activation-quantized output heads use actual forwards. Existing Spectrum cache policy still applies.
+This patch adds forecasting only; compilation and trained guidance are separate. Short schedules may leave no room for forecasts; compare with `enabled=false` for your prompts.
 
 ### Standalone correction patchers
 

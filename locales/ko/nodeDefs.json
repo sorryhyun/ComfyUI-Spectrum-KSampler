@@ -595,7 +595,7 @@
         "tooltip": "ComfyUI 기본 로더로 불러온 Krea2 MODEL입니다."
       },
       "steps": {
-        "tooltip": "워크플로우 호환성을 위한 값입니다. 실제 예측 구간은 하위 샘플러의 sigma 스케줄을 사용합니다."
+        "tooltip": "이 값은 무시됩니다. 예측 구간은 하위 샘플러의 실제 sigma 스케줄을 사용합니다."
       },
       "window_size": {
         "tooltip": "초기 caching window입니다. 1.0은 cached step을 사실상 비활성화합니다."

@@ -595,7 +595,7 @@
         "tooltip": "ComfyUI 内置加载器加载的 Krea2 MODEL。"
       },
       "steps": {
-        "tooltip": "保留此值以兼容工作流。预测区间使用下游采样器的实际 sigma 调度。"
+        "tooltip": "此值会被忽略。预测区间使用下游采样器的实际 sigma 调度。"
       },
       "window_size": {
         "tooltip": "初始 caching window。1.0 实际上会停用 cached step。"

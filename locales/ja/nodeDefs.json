@@ -595,7 +595,7 @@
         "tooltip": "ComfyUI 標準ローダーで読み込んだ Krea2 MODEL。"
       },
       "steps": {
-        "tooltip": "ワークフロー互換性のための値です。実際の予測区間には下流サンプラーの sigma スケジュールを使用します。"
+        "tooltip": "この値は無視されます。予測区間には下流サンプラーの実際の sigma スケジュールを使用します。"
       },
       "window_size": {
         "tooltip": "初期 caching window です。1.0 は cached step を実質的に無効化します。"

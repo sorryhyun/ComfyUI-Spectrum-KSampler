@@ -141,13 +141,13 @@ class NativeKrea2SpectrumTest(unittest.TestCase):
         nodes = importlib.import_module(f"{PACKAGE}.nodes")
         cls = nodes.SpectrumKrea2ModelPatch
         self.assertIs(nodes.NODE_CLASS_MAPPINGS["SpectrumKrea2ModelPatch"], cls)
-        expected = {
-            "contract_version": 1, "model_family": "krea2", "loader": "comfy_native",
-            "features": ["forecast"], "stages": ["sampler", "highres", "detailer", "upscale"],
-        }
-        self.assertEqual(cls.SPECTRUM_CAPABILITIES, expected)
+        self.assertNotIn("NativeKrea2SpectrumPatch", nodes.NODE_CLASS_MAPPINGS)
+        self.assertFalse(hasattr(cls, "SPECTRUM_CAPABILITIES"))
         inputs = cls.INPUT_TYPES()["required"]
-        self.assertEqual(inputs["model"][1]["spectrum_capabilities"], expected)
+        self.assertEqual(inputs["model"][0], "MODEL")
+        self.assertNotIn("spectrum_capabilities", inputs["model"][1])
+        self.assertEqual(cls.RETURN_TYPES, ("MODEL",))
+        self.assertEqual(cls.FUNCTION, "patch")
         node_params = inspect.signature(cls.patch).parameters
         api_params = inspect.signature(krea2.apply_krea2_model_patch).parameters
         self.assertEqual(tuple(node_params)[1:], tuple(api_params))
@@ -159,19 +159,6 @@ class NativeKrea2SpectrumTest(unittest.TestCase):
                 self.assertEqual(inputs[field][1]["default"], param.default)
         original = Patcher()
         self.assertIs(cls().patch(original, enabled=False)[0], original)
-
-    def test_legacy_node_and_import_preserve_existing_workflows(self):
-        nodes = importlib.import_module(f"{PACKAGE}.nodes")
-        legacy_module = importlib.import_module(f"{PACKAGE}.krea2")
-        cls = nodes.SpectrumKrea2ModelPatch
-        legacy = nodes.NODE_CLASS_MAPPINGS["NativeKrea2SpectrumPatch"]
-        self.assertTrue(legacy.DEPRECATED)
-        self.assertTrue(issubclass(legacy, cls))
-        self.assertEqual(legacy.INPUT_TYPES(), cls.INPUT_TYPES())
-        self.assertIs(legacy.patch, cls.patch)
-        self.assertIs(legacy_module.apply_krea2_spectrum_patch, krea2.apply_krea2_model_patch)
-        self.assertNotIn("NativeKrea2SpectrumPatch", nodes.NODE_DISPLAY_NAME_MAPPINGS)
-        self.assertEqual(nodes.NODE_DISPLAY_NAME_MAPPINGS["SpectrumKrea2ModelPatch"], "Spectrum Model Patch (Krea2)")
 
     def test_head_matches_native_for_dtypes_batches_temporal_and_odd_padding(self):
         for dtype in (torch.float32, torch.bfloat16):
@@ -272,7 +259,7 @@ class NativeKrea2SpectrumTest(unittest.TestCase):
 
     def test_raw_style_long_schedule_keeps_separate_and_batched_cfg_branches(self):
         # RAW uses the same architecture with a longer downstream schedule.
-        # The compatibility steps=8 hint must not truncate this 52-step scope.
+        # The ignored steps=8 input must not truncate this 52-step scope.
         sigmas = tuple(1 - i / 52 for i in range(53))
 
         def sample(model, batched):

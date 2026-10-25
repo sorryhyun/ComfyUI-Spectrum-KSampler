@@ -1828,26 +1828,17 @@ class SpectrumMossModelPatch(DiTSpectrumPatchAdvanced):
 class SpectrumKrea2ModelPatch(DiTSpectrumPatchAdvanced):
     """Experimental forecast-only MODEL patch for native ComfyUI Krea2."""
 
-    SPECTRUM_CAPABILITIES = {
-        "contract_version": 1,
-        "model_family": "krea2",
-        "loader": "comfy_native",
-        "features": ["forecast"],
-        "stages": ["sampler", "highres", "detailer", "upscale"],
-    }
-
     @classmethod
     def INPUT_TYPES(cls):
         inputs = super().INPUT_TYPES()
         inputs["required"]["model"] = ("MODEL", {
             "tooltip": "Krea2 MODEL from ComfyUI's built-in loader. Experimental forecast acceleration; inspect image quality.",
-            "spectrum_capabilities": cls.SPECTRUM_CAPABILITIES,
         })
         for field, value in {"steps": 8, "warmup_steps": 3, "tail_actual_steps": 2,
                              "cheby_degree": 1, "history_size": 8}.items():
             inputs["required"][field][1]["default"] = value
         inputs["required"]["steps"][1]["tooltip"] = (
-            "Retained for workflow compatibility. The downstream sampler's actual sigma schedule is used."
+            "Ignored. The downstream sampler's actual sigma schedule is used."
         )
         inputs["required"]["compat_policy"] = (COMPAT_POLICIES, {"default": "conservative"})
         return inputs
@@ -1876,12 +1867,6 @@ class SpectrumKrea2ModelPatch(DiTSpectrumPatchAdvanced):
             history_size=history_size, enabled=enabled, one_sampler_only=one_sampler_only,
             verbose=verbose, compat_policy=compat_policy,
         ),)
-
-
-class NativeKrea2SpectrumPatch(SpectrumKrea2ModelPatch):
-    """Deprecated node ID retained for workflows created before the public rename."""
-
-    DEPRECATED = True
 
 
 class SpectrumSPDKSampler:
@@ -2090,7 +2075,6 @@ NODE_CLASS_MAPPINGS = {
     "MossSpectrumKSampler": MossSpectrumKSampler,
     "SpectrumMossModelPatch": SpectrumMossModelPatch,
     "SpectrumKrea2ModelPatch": SpectrumKrea2ModelPatch,
-    "NativeKrea2SpectrumPatch": NativeKrea2SpectrumPatch,
     # Deprecated aliases — the mod-guidance + SEA samplers are now folded into
     # the unified SpectrumKSampler (mod_w_profile + refresh_ratio dials). These
     # keys are kept so saved workflows referencing them still load; they are
