@@ -547,7 +547,7 @@
         "tooltip": "ComfyUI 内置加载器加载的 MOSS MODEL。"
       },
       "steps": {
-        "tooltip": "保留此值以兼容工作流。预测区间使用下游采样器的实际 sigma 调度。"
+        "tooltip": "此值會被忽略。預測區間使用下游取樣器的實際 sigma 排程。"
       },
       "window_size": {
         "tooltip": "初始 caching window。1.0 實際上會停用 cached step。"

@@ -1773,14 +1773,6 @@ class DiTSpectrumPatchAdvanced(DiTSpectrumPatch):
 class SpectrumMossModelPatch(DiTSpectrumPatchAdvanced):
     """Forecast-only adapter for ComfyUI's native MOSS-Image implementation."""
 
-    SPECTRUM_CAPABILITIES = {
-        "contract_version": 1,
-        "model_family": "moss_image",
-        "loader": "comfy_native",
-        "features": ["forecast"],
-        "stages": ["sampler", "highres", "detailer", "upscale"],
-    }
-
     @classmethod
     def INPUT_TYPES(cls):
         inputs = super().INPUT_TYPES()
@@ -1788,7 +1780,6 @@ class SpectrumMossModelPatch(DiTSpectrumPatchAdvanced):
             "MODEL",
             {
                 "tooltip": "MOSS-Image MODEL from ComfyUI's built-in loader. Keeps its sampling and flow shift.",
-                "spectrum_capabilities": cls.SPECTRUM_CAPABILITIES,
             },
         )
         inputs["required"]["compat_policy"] = (
@@ -1796,7 +1787,7 @@ class SpectrumMossModelPatch(DiTSpectrumPatchAdvanced):
             {"default": "conservative"},
         )
         inputs["required"]["steps"][1]["tooltip"] = (
-            "Retained for workflow compatibility. The downstream sampler's actual "
+            "Ignored. The downstream sampler's actual "
             "sigma schedule determines forecast warmup and tail length."
         )
         return inputs
@@ -1832,12 +1823,6 @@ class SpectrumMossModelPatch(DiTSpectrumPatchAdvanced):
             history_size=history_size, enabled=enabled,
             one_sampler_only=one_sampler_only, verbose=verbose, compat_policy=compat_policy,
         ),)
-
-
-class NativeMossSpectrumPatch(SpectrumMossModelPatch):
-    """Deprecated node ID retained for workflows created before the public rename."""
-
-    DEPRECATED = True
 
 
 class SpectrumKrea2ModelPatch(DiTSpectrumPatchAdvanced):
@@ -2104,7 +2089,6 @@ NODE_CLASS_MAPPINGS = {
     "DiTSpectrumPatchAdvanced": DiTSpectrumPatchAdvanced,
     "MossSpectrumKSampler": MossSpectrumKSampler,
     "SpectrumMossModelPatch": SpectrumMossModelPatch,
-    "NativeMossSpectrumPatch": NativeMossSpectrumPatch,
     "SpectrumKrea2ModelPatch": SpectrumKrea2ModelPatch,
     "NativeKrea2SpectrumPatch": NativeKrea2SpectrumPatch,
     # Deprecated aliases — the mod-guidance + SEA samplers are now folded into

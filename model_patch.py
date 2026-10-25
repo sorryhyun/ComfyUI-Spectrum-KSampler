@@ -33,6 +33,8 @@ def _model_patch_batch_keys(state, c, branches):
         return keys
     # SLG can call the same conditioning UUID with different blocks at one sigma.
     # Snapshot the map on each call; keep callable IDs alive only for this sample.
+    # Providers must reuse their replacement callables to accumulate history.
+    # Fresh callables per call never forecast and retain features until sample end.
     context = frozenset((block, id(patch)) for block, patch in replacements.items())
     state.native_patch_callables.update((id(patch), patch) for patch in replacements.values())
     return [

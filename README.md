@@ -121,83 +121,15 @@ MOSS-Image loader -> KSampler (Spectrum for MOSS) -> VAE Decode
 
 ### MODEL patch for ComfyUI's built-in MOSS loader
 
-For MOSS-Image loaded by **ComfyUI's built-in loader**, use
-**Spectrum Model Patch (MOSS)** before a standard sampler:
+Use **Spectrum Model Patch (MOSS)** for MOSS-Image loaded by ComfyUI's built-in loader:
 
 ```text
 ComfyUI MOSS MODEL -> Spectrum Model Patch (MOSS) -> KSampler / Custom Sampler
 ```
 
-The public node ID is `SpectrumMossModelPatch`. The earlier
-`NativeMossSpectrumPatch` ID remains as a deprecated compatibility alias for
-saved workflows. Here, "native" means ComfyUI's own MOSS implementation;
-Spectrum is supplied by this extension.
-The original `KSampler (Spectrum for MOSS)` above still uses its existing
-custom-loader path. Choose the node that matches your loader.
-
-This MODEL patch preserves model sampling, CFG and flow shift. It does not add
-trained Mod Guidance, SPD, skip-layer guidance or compilation.
-
-Each downstream sampling invocation gets fresh forecast state using the actual
-sigma schedule, including partial-denoise Highres, Detailer cycles and USDU
-tiles. The `steps` input remains for workflow compatibility; it does not
-override that schedule. `one_sampler_only` limits the patch to the first
-nonempty sampling invocation in a workflow execution. Warmup and final-tail
-steps always compute the model, and a short schedule may do no forecasting.
-
-The adapter falls back to full computation for ControlNet inputs, active
-scheduled weight hooks and replacement of the last transformer block.
-APPLY_MODEL/DIFFUSION_MODEL wrappers do not themselves disable forecasting;
-block compilation and feature-modifying hooks can compose through the existing
-Spectrum cache policy without registration or an approval list.
-Unknown model-function wrappers still fall back
-under the default conservative policy. Direct forwards outside a sampler scope
-compute normally. Fixed LoRA weights still pass through the model's own head
-modules; this does not establish compatibility with every external patch
-combination. Compare against `enabled=false` for your prompts and resolutions.
-
-Capture resolves the live block inside the diffusion-model wrapper boundary,
-after compile swaps and upstream feature hooks have entered. Its temporary
-hook is removed in `finally`, including failed forwards. This differs from the
-custom-loader MOSS capture site because ComfyUI's built-in MOSS fuses its final
-normalization. Forecast math, warmup/tail rules, explicit cache vetoes and the
-existing model-function-wrapper policy are shared with the original Spectrum
-implementation. Verbose logs report actual and forecast call counts; an enabled
-patch is not a claim that a particular short schedule skipped any calls.
-
-Per-call DiT block replacements have separate forecast histories, including
-regular and SLG calls with the same conditioning UUID. Each history needs its
-own actual observations before forecasting. CPU tests cover paired SLG calls,
-uncond SLG window transitions, UUID policy and sampling-scope cleanup. Replacing
-the last MOSS block still uses full computation because it bypasses capture.
-
-Compilation also depends on the checkpoint's kernels. On ComfyUI v0.42.1,
-the tested MOSS INT8/ConvRot checkpoint failed Inductor tracing in Comfy Kitchen
-attention and fused INT8 linear operations even with Spectrum disabled.
-Changing attention alone did not resolve the fused-linear failure. This is
-separate from Spectrum wrapper composition; use the checkpoint without block
-compilation until its kernels support tracing. Spectrum does not silently
-disable compilation or replace the model's attention implementation.
-
-The adapter reuses the existing MOSS token forecaster and Spectrum cache/branch
-policy. Shared code owns forecasting and sampling-state lifetime, while the
-model-specific module owns identification, feature capture and output-head
-reconstruction. Architecture imports are lazy so an older ComfyUI can still
-load the original nodes. Using this patch requires a ComfyUI build that
-includes its own MOSS-Image implementation.
-
-Integration contract:
-
-- Discover `SpectrumMossModelPatch` through `NODE_CLASS_MAPPINGS`, verify its
-  versioned `SPECTRUM_CAPABILITIES`, and call `patch()` with the declared inputs.
-  Model, loader, feature and stage support are explicit; the display name is
-  not a discovery API. Older installations may expose `NativeMossSpectrumPatch`.
-- Python callers use `model_patch_moss.apply_moss_model_patch`. Future model
-  adapters use `model_patch.apply_spectrum_model_patch` for the shared lifecycle.
-  `feature_forecast.py` owns the existing token prediction math.
-- The former `native_moss.apply_native_moss_spectrum_patch`,
-  `native_spectrum.apply_native_spectrum_patch` and
-  `moss.apply_native_moss_spectrum_patch` imports remain compatibility aliases.
+It preserves model sampling, CFG and flow shift. Each sampler invocation gets fresh forecast state from its actual sigma schedule; the patch's `steps` input is ignored.
+ControlNet inputs, active scheduled weight hooks and replacement of the last transformer block fall back to actual forwards. Existing Spectrum cache policy still applies.
+The original **KSampler (Spectrum for MOSS)** above remains the option for the custom `moss-image` loader.
 
 ### MODEL patch for ComfyUI's built-in Krea2 loader (experimental)
 
