@@ -152,21 +152,6 @@ def run_step(model, sigma, *, branch=0, height=2, width=3, options=None, base=No
 
 
 class NativeMossSpectrumTest(unittest.TestCase):
-    def test_legacy_node_and_python_imports_resolve_to_the_canonical_patch(self):
-        canonical = node_module.SpectrumMossModelPatch
-        legacy = node_module.NODE_CLASS_MAPPINGS["NativeMossSpectrumPatch"]
-        self.assertIs(legacy, node_module.NativeMossSpectrumPatch)
-        self.assertTrue(legacy.DEPRECATED)
-        self.assertIs(legacy.patch, canonical.patch)
-        self.assertEqual(legacy.INPUT_TYPES(), canonical.INPUT_TYPES())
-        self.assertEqual(legacy.RETURN_TYPES, canonical.RETURN_TYPES)
-        old_moss = importlib.import_module(f"{PACKAGE}.native_moss")
-        old_runner = importlib.import_module(f"{PACKAGE}.native_spectrum")
-        self.assertIs(old_moss.apply_native_moss_spectrum_patch, model_patch_moss.apply_moss_model_patch)
-        self.assertIs(moss.apply_native_moss_spectrum_patch, model_patch_moss.apply_moss_model_patch)
-        self.assertIs(old_runner.apply_native_spectrum_patch, model_patch.apply_spectrum_model_patch)
-        self.assertIs(old_runner.record_feature, model_patch.record_feature)
-
     def test_native_head_matches_actual_forward_for_batches_and_dtypes(self):
         for dtype in (torch.float32, torch.bfloat16):
             for batch in (1, 2):
@@ -190,14 +175,13 @@ class NativeMossSpectrumTest(unittest.TestCase):
 
     def test_public_contract_and_disabled_identity(self):
         cls = node_module.SpectrumMossModelPatch
-        expected = {
-            "contract_version": 1, "model_family": "moss_image",
-            "loader": "comfy_native", "features": ["forecast"],
-            "stages": ["sampler", "highres", "detailer", "upscale"],
-        }
         self.assertIs(node_module.NODE_CLASS_MAPPINGS["SpectrumMossModelPatch"], cls)
-        self.assertEqual(cls.SPECTRUM_CAPABILITIES, expected)
-        self.assertEqual(cls.INPUT_TYPES()["required"]["model"][1]["spectrum_capabilities"], expected)
+        self.assertNotIn("NativeMossSpectrumPatch", node_module.NODE_CLASS_MAPPINGS)
+        self.assertFalse(hasattr(cls, "SPECTRUM_CAPABILITIES"))
+        self.assertEqual(cls.INPUT_TYPES()["required"]["model"][0], "MODEL")
+        self.assertNotIn("spectrum_capabilities", cls.INPUT_TYPES()["required"]["model"][1])
+        self.assertEqual(cls.RETURN_TYPES, ("MODEL",))
+        self.assertEqual(cls.FUNCTION, "patch")
         self.assertEqual(
             tuple(inspect.signature(cls.patch).parameters),
             tuple(inspect.signature(node_module.DiTSpectrumPatchAdvanced.patch).parameters),

@@ -42,8 +42,6 @@ from .spectrum import (
 )
 
 from .feature_forecast import _Forecaster, TokenSpectrumState, _update_forecasters
-# Retain the local adapter's import path for existing integrations.
-from .native_moss import apply_native_moss_spectrum_patch
 
 logger = logging.getLogger(__name__)
 
