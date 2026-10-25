@@ -277,6 +277,9 @@ def apply_moss_spectrum_patch(
 ):
     """Return a MODEL clone with Spectrum (when ``enabled``) and per-block
     compile (when ``compile``)."""
+    # Before the early return: the sampler applies ModelSamplingSD3
+    # (multiplier 1000) next, which is wrong for ComfyUI's built-in MOSS model.
+    _require_moss(model)
     if not enabled and not compile:
         return model
     if history_size < cheby_degree + 2:
