@@ -3,7 +3,7 @@
 FEI = soft band-energy on the simplex, computed by stacked Gaussian
 low-pass on a 4D `[B, C, H, W]` latent. Used as the routing key for
 HydraLoRA-FEI (see ``networks/lora_modules/hydra.py`` and
-``docs/methods/hydra-lora.md``).
+``docs/anima/methods/hydra-lora.md``).
 
 **2 bands**, not the FeRA paper's 3: on flow-matching latents the mid band
 carried <8% of the energy at every σ_mid tried

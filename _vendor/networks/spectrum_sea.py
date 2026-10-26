@@ -5,8 +5,8 @@ alternative *when-to-skip* trigger (``schedule="sea"``), replacing Spectrum's
 content-blind growing window. The Chebyshev feature **forecasting** (the reuse
 path) is unchanged — only the decision metric is swapped, which keeps the
 per-step ``noise_pred`` reconstruction (and therefore SMC-CFG / mod-guidance
-composition) intact. See ``docs/inference/spectrum.md`` §"SEA schedule" and
-the validation in ``docs/findings/seacache_sea_decision_metric.md``.
+composition) intact. See ``docs/anima/inference/spectrum.md`` §"SEA schedule" and
+the validation in ``docs/anima/findings/seacache_sea_decision_metric.md``.
 
 Reconstructs the timestep-dependent filter from SeaCache (Chung et al.,
 "SeaCache: Spectral-Evolution-Aware Cache for Accelerating Diffusion Models",
@@ -104,7 +104,7 @@ def l1rel(a: torch.Tensor, b: torch.Tensor) -> float:
 # per-config calibration. ``solve_delta_for_refresh_ratio`` binary-searches the
 # δ whose accumulate-reset rule, replayed over a recorded distance trace, hits a
 # target fraction of refreshes — making the SEA arm a like-for-like swap at
-# matched compute (docs/inference/spectrum.md §"SEA schedule").
+# matched compute (docs/anima/inference/spectrum.md §"SEA schedule").
 # ---------------------------------------------------------------------------
 
 
