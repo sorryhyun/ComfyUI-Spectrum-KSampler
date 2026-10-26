@@ -41,7 +41,7 @@ from .spectrum import (
     _spectrum_batch_keys,
 )
 
-from .feature_forecast import _Forecaster, TokenSpectrumState, _update_forecasters
+from .feature_forecast import TokenSpectrumState, _update_forecasters
 
 logger = logging.getLogger(__name__)
 

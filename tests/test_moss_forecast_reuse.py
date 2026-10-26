@@ -29,6 +29,7 @@ package = types.ModuleType(PACKAGE)
 package.__path__ = [str(ROOT)]
 sys.modules[PACKAGE] = package
 moss = importlib.import_module(f"{PACKAGE}.moss")
+feature_forecast = importlib.import_module(f"{PACKAGE}.feature_forecast")
 
 
 class CustomLoaderToy(nn.Module):
@@ -165,7 +166,7 @@ class MossForecastReuseTest(unittest.TestCase):
             state = dit.final_norm_video._spectrum_state
             self.assertEqual(set(state.forecasters), {0, 1})
             self.assertIsInstance(state, moss.MossSpectrumState)
-            self.assertTrue(all(isinstance(f, moss._Forecaster) for f in state.forecasters.values()))
+            self.assertTrue(all(isinstance(f, feature_forecast._Forecaster) for f in state.forecasters.values()))
             self.assertFalse(torch.equal(state.forecasters[0].h[0], state.forecasters[1].h[0]))
             self.assertEqual((dit.forward_calls, dit.sample_calls), (3, 6))
             features = torch.cat([state.forecasters[key].predict(3.0) for key in (0, 1)])
@@ -185,7 +186,7 @@ class MossForecastReuseTest(unittest.TestCase):
             self.assertIsNone(state.moss_feats)
 
     def test_same_step_correction_replaces_observation_before_taylor_prediction(self):
-        forecast = moss._Forecaster(m=1, lam=0.1, w=0.0, total_steps=8, k=8)
+        forecast = feature_forecast._Forecaster(m=1, lam=0.1, w=0.0, total_steps=8, k=8)
         for step in range(3):
             forecast.update(step, torch.full((1, 2, 4), float(step - 10)))
             forecast.update(step, torch.full((1, 2, 4), float(step)))
