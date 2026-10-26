@@ -132,6 +132,19 @@ It preserves model sampling, CFG and flow shift. Each sampler invocation gets fr
 ControlNet inputs, active scheduled weight hooks and replacement of the last transformer block fall back to actual forwards. Existing Spectrum cache policy still applies.
 The original **KSampler (Spectrum for MOSS)** above remains the option for the custom `moss-image` loader.
 
+### MODEL patch for ComfyUI's built-in Krea2 loader (experimental)
+
+Use **Spectrum Model Patch (Krea2)** for ComfyUI's built-in Krea2 loader:
+
+```text
+ComfyUI Krea2 MODEL -> Spectrum Model Patch (Krea2) -> KSampler / Custom Sampler
+```
+
+It preserves sampling, CFG and flow shift, using fresh forecast state for each sampler invocation. The patch's `steps` input is ignored in favor of the actual sampler schedule.
+Defaults are **Turbo starting values**: degree 1, warmup 3, tail 2, history 8. For **RAW**, set checkpoint-appropriate steps, CFG and shift on the downstream sampler; actual RAW checkpoint quality remains unverified.
+ControlNet, scheduled weight hooks, reference images, multiple temporal frames, post-input token patches and activation-quantized output heads use actual forwards. Existing Spectrum cache policy still applies.
+This patch adds forecasting only; compilation and trained guidance are separate. Short schedules may leave no room for forecasts; compare with `enabled=false` for your prompts.
+
 ### Standalone correction patchers
 
 The extra correction features are also available as standalone `MODEL -> MODEL` patches. These patchers are tuned for Anima-style flow-matching DiTs. They may run on other DiT models that expose compatible ComfyUI sampler semantics, but quality and stability are not guaranteed there.
