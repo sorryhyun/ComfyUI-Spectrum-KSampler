@@ -538,5 +538,53 @@
         "tooltip": "对每个 DiT block 做 torch.compile（inductor，动态 shape）。在第一次采样时编译；没有 C++ 编译器时以 eager 运行。"
       }
     }
+  },
+  "SpectrumMossModelPatch": {
+    "display_name": "Spectrum Model Patch (MOSS)",
+    "description": "为 ComfyUI 内置加载器加载的 MOSS 提供特征预测加速。保留 sampler、CFG 和 shift，每次采样调用均重建缓存。不添加训练引导、SPD 或 compile。",
+    "inputs": {
+      "model": {
+        "tooltip": "ComfyUI 内置加载器加载的 MOSS MODEL。"
+      },
+      "steps": {
+        "tooltip": "此值会被忽略。预测区间使用下游采样器的实际 sigma 调度。"
+      },
+      "window_size": {
+        "tooltip": "初始 caching window。1.0 实际上会停用 cached step。"
+      },
+      "flex_window": {
+        "tooltip": "actual forward 后增加 window size 的值。"
+      },
+      "warmup_steps": {
+        "tooltip": "开头必定运行 actual DiT forward 的 step 数。"
+      },
+      "tail_actual_steps": {
+        "tooltip": "最后必定运行 actual DiT forward 的 step 数。"
+      },
+      "blend_w": {
+        "tooltip": "Chebyshev prediction 和 Taylor interpolation 的 blend ratio。1.0 为纯 Chebyshev。"
+      },
+      "cheby_degree": {
+        "tooltip": "Chebyshev polynomial degree。"
+      },
+      "ridge_lambda": {
+        "tooltip": "ridge regression regularization strength。"
+      },
+      "history_size": {
+        "tooltip": "forecaster 保留的 observation history buffer 大小。"
+      },
+      "enabled": {
+        "tooltip": "关闭时直接返回输入 MODEL。"
+      },
+      "one_sampler_only": {
+        "tooltip": "启用后，只对使用此 patched MODEL 的第一个 sampler run 应用 Spectrum，同一 workflow 的后续 sampler run 会直接通过。"
+      },
+      "verbose": {
+        "tooltip": "将 actual/cached step 判定输出到 log。"
+      },
+      "compat_policy": {
+        "tooltip": "Spectrum 是否可 skip DiT block 的安全标准。legacy 是最快的既有行为；conservative 会在 wrapper/shape/step/veto 不安全时改用 actual forward；strict 适合 exact artist mix 或 multi-conditioning，只有 UUID 可用时才允许 cache。"
+      }
+    }
   }
 }

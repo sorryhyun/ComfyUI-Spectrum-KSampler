@@ -19,6 +19,7 @@ from .mod_guidance_layouts import (
 )
 from .smc_cfg import install_smc_cfg
 from .moss import MossSpectrumKSampler
+from .model_patch_moss import apply_moss_model_patch
 from .spectrum import COMPAT_POLICIES, apply_dit_spectrum_patch, spectrum_sample
 
 logger = logging.getLogger(__name__)
@@ -1769,6 +1770,61 @@ class DiTSpectrumPatchAdvanced(DiTSpectrumPatch):
         return (patched,)
 
 
+class SpectrumMossModelPatch(DiTSpectrumPatchAdvanced):
+    """Forecast-only adapter for ComfyUI's native MOSS-Image implementation."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        inputs = super().INPUT_TYPES()
+        inputs["required"]["model"] = (
+            "MODEL",
+            {
+                "tooltip": "MOSS-Image MODEL from ComfyUI's built-in loader. Keeps its sampling and flow shift.",
+            },
+        )
+        inputs["required"]["compat_policy"] = (
+            COMPAT_POLICIES,
+            {"default": "conservative"},
+        )
+        inputs["required"]["steps"][1]["tooltip"] = (
+            "Ignored. The downstream sampler's actual "
+            "sigma schedule determines forecast warmup and tail length."
+        )
+        return inputs
+
+    DESCRIPTION = (
+        "Spectrum feature forecasting for MOSS-Image loaded by ComfyUI's built-in loader. "
+        "Preserves the supplied model sampling, flow shift and guidance. "
+        "Does not compile the model. Each sampler invocation gets fresh forecast "
+        "state using its actual sigma schedule."
+    )
+
+    def patch(
+        self,
+        model,
+        steps=30,
+        window_size=2.0,
+        flex_window=0.25,
+        warmup_steps=6,
+        tail_actual_steps=3,
+        blend_w=0.3,
+        cheby_degree=3,
+        ridge_lambda=0.1,
+        history_size=100,
+        enabled=True,
+        one_sampler_only=False,
+        verbose=False,
+        compat_policy="conservative",
+    ):
+        return (apply_moss_model_patch(
+            model, steps=steps, window_size=window_size, flex_window=flex_window,
+            warmup_steps=warmup_steps, tail_actual_steps=tail_actual_steps,
+            blend_w=blend_w, cheby_degree=cheby_degree, ridge_lambda=ridge_lambda,
+            history_size=history_size, enabled=enabled,
+            one_sampler_only=one_sampler_only, verbose=verbose, compat_policy=compat_policy,
+        ),)
+
+
 class SpectrumSPDKSampler:
     """KSampler (Spectrum + SPD) — the SPEED sampler.
 
@@ -1973,6 +2029,7 @@ NODE_CLASS_MAPPINGS = {
     "DiTSpectrumPatch": DiTSpectrumPatch,
     "DiTSpectrumPatchAdvanced": DiTSpectrumPatchAdvanced,
     "MossSpectrumKSampler": MossSpectrumKSampler,
+    "SpectrumMossModelPatch": SpectrumMossModelPatch,
     # Deprecated aliases — the mod-guidance + SEA samplers are now folded into
     # the unified SpectrumKSampler (mod_w_profile + refresh_ratio dials). These
     # keys are kept so saved workflows referencing them still load; they are
@@ -1992,4 +2049,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "DiTSpectrumPatch": "DiT Spectrum Patch",
     "DiTSpectrumPatchAdvanced": "DiT Spectrum Patch Advanced",
     "MossSpectrumKSampler": "KSampler (Spectrum for MOSS)",
+    "SpectrumMossModelPatch": "Spectrum Model Patch (MOSS)",
 }

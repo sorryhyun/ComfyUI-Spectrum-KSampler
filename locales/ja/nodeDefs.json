@@ -538,5 +538,53 @@
         "tooltip": "DiT の各 block に torch.compile（inductor、dynamic shape）を適用します。最初の sample でコンパイルし、C++ コンパイラがなければ eager で実行します。"
       }
     }
+  },
+  "SpectrumMossModelPatch": {
+    "display_name": "Spectrum Model Patch (MOSS)",
+    "description": "ComfyUI 標準ローダーで読み込んだ MOSS の特徴予測による高速化。sampler・CFG・shift を維持し、サンプリング呼び出しごとにキャッシュを初期化します。学習済みガイダンス・SPD・compile は追加しません。",
+    "inputs": {
+      "model": {
+        "tooltip": "ComfyUI 標準ローダーで読み込んだ MOSS MODEL。"
+      },
+      "steps": {
+        "tooltip": "この値は無視されます。予測区間には下流サンプラーの実際の sigma スケジュールを使用します。"
+      },
+      "window_size": {
+        "tooltip": "初期 caching window です。1.0 は cached step を実質的に無効化します。"
+      },
+      "flex_window": {
+        "tooltip": "actual forward 後に window サイズを増やす値です。"
+      },
+      "warmup_steps": {
+        "tooltip": "最初に必ず actual DiT forward を実行する step 数です。"
+      },
+      "tail_actual_steps": {
+        "tooltip": "最後に必ず actual DiT forward を実行する step 数です。"
+      },
+      "blend_w": {
+        "tooltip": "Chebyshev 予測と Taylor 補間の blend 比率です。1.0 は純粋な Chebyshev です。"
+      },
+      "cheby_degree": {
+        "tooltip": "Chebyshev polynomial degree です。"
+      },
+      "ridge_lambda": {
+        "tooltip": "ridge regression の正則化強度です。"
+      },
+      "history_size": {
+        "tooltip": "forecaster が保持する観測 history buffer のサイズです。"
+      },
+      "enabled": {
+        "tooltip": "オフにすると入力 MODEL をそのまま返します。"
+      },
+      "one_sampler_only": {
+        "tooltip": "オンにすると、この patched MODEL を使う最初の sampler run だけに Spectrum を適用し、同じ workflow 内の後続 sampler run は通過させます。"
+      },
+      "verbose": {
+        "tooltip": "actual/cached step の判定をログに出力します。"
+      },
+      "compat_policy": {
+        "tooltip": "Spectrum が DiT block を skip してよい安全基準です。legacy は最速の既存動作、conservative は wrapper/shape/step/veto が不安全なら actual forward に戻し、strict は exact artist mix や multi-conditioning 向けに UUID がある場合だけ cache を許可します。"
+      }
+    }
   }
 }

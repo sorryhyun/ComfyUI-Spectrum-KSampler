@@ -120,6 +120,18 @@ MOSS-Image loader -> KSampler (Spectrum for MOSS) -> VAE Decode
 - **Measured** sampling time (1024², 50 steps, NVIDIA GeForce RTX 5070 Ti): stock `ModelSamplingSD3` → `SkipLayerGuidanceDiTSimple` → `KSampler` 68 s; this node 25.9 s with compile off, 21.2 s with compile on.
 - **Scheduler.** ComfyUI's schedulers do not snap σ to the training grid as the MOSS pipeline does. At 50 steps no schedule gave visibly better images, and Spectrum's defaults carry over to `sgm_uniform`. Grids, A/B and numbers: [docs/moss_scheduler.md](docs/moss_scheduler.md).
 
+### MODEL patch for ComfyUI's built-in MOSS loader
+
+Use **Spectrum Model Patch (MOSS)** for MOSS-Image loaded by ComfyUI's built-in loader:
+
+```text
+ComfyUI MOSS MODEL -> Spectrum Model Patch (MOSS) -> KSampler / Custom Sampler
+```
+
+It preserves model sampling, CFG and flow shift. Each sampler invocation gets fresh forecast state from its actual sigma schedule; the patch's `steps` input is ignored.
+ControlNet inputs, active scheduled weight hooks and replacement of the last transformer block fall back to actual forwards. Existing Spectrum cache policy still applies.
+The original **KSampler (Spectrum for MOSS)** above remains the option for the custom `moss-image` loader.
+
 ### Standalone correction patchers
 
 The extra correction features are also available as standalone `MODEL -> MODEL` patches. These patchers are tuned for Anima-style flow-matching DiTs. They may run on other DiT models that expose compatible ComfyUI sampler semantics, but quality and stability are not guaranteed there.

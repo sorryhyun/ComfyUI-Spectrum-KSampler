@@ -1,3 +1,4 @@
+import ast
 import json
 import unittest
 from pathlib import Path
@@ -190,12 +191,22 @@ EXPECTED_INPUTS = {
 }
 
 
+EXPECTED_INPUTS["SpectrumMossModelPatch"] = EXPECTED_INPUTS["DiTSpectrumPatchAdvanced"].copy()
+
+
 def _load(locale):
     path = ROOT / "locales" / locale / "nodeDefs.json"
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 class LocaleNodeDefsTest(unittest.TestCase):
+    def test_expected_nodes_cover_actual_display_mappings(self):
+        tree = ast.parse((ROOT / "nodes.py").read_text(encoding="utf-8"))
+        mappings = next(node.value for node in tree.body if isinstance(node, ast.Assign)
+                        and any(isinstance(target, ast.Name) and target.id == "NODE_DISPLAY_NAME_MAPPINGS"
+                                for target in node.targets))
+        self.assertEqual(set(ast.literal_eval(mappings)), set(EXPECTED_INPUTS))
+
     def test_locales_cover_displayed_nodes_without_socket_renames(self):
         for locale in LOCALES:
             with self.subTest(locale=locale):
