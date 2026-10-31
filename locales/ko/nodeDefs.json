@@ -586,5 +586,53 @@
         "tooltip": "Spectrum이 DiT block을 건너뛰는 안전 기준입니다. legacy는 가장 빠른 기존 방식, conservative는 wrapper/shape/step/veto가 불안전하면 actual forward로 대체, strict는 exact artist mix나 multi-conditioning용으로 UUID가 있을 때만 cache를 허용합니다."
       }
     }
+  },
+  "SpectrumKrea2ModelPatch": {
+    "display_name": "Spectrum Model Patch (Krea2)",
+    "description": "ComfyUI 기본 로더로 불러온 Krea2의 특징 예측 가속입니다. sampler·CFG·shift를 유지하고 각 샘플링 호출마다 캐시를 초기화합니다. 학습 가이던스·SPD·compile은 추가하지 않습니다. 실험적 지원입니다. 가속을 끈 결과와 품질을 비교하세요. 기본값은 Turbo 시작값입니다. RAW는 하위 샘플러의 steps·CFG·shift를 사용합니다. RAW 체크포인트의 화질은 아직 검증하지 않았습니다.",
+    "inputs": {
+      "model": {
+        "tooltip": "ComfyUI 기본 로더로 불러온 Krea2 MODEL입니다."
+      },
+      "steps": {
+        "tooltip": "이 값은 무시됩니다. 예측 구간은 하위 샘플러의 실제 sigma 스케줄을 사용합니다."
+      },
+      "window_size": {
+        "tooltip": "초기 caching window입니다. 1.0은 cached step을 사실상 비활성화합니다."
+      },
+      "flex_window": {
+        "tooltip": "actual forward 이후 window 크기를 늘리는 값입니다."
+      },
+      "warmup_steps": {
+        "tooltip": "초기에 항상 actual DiT forward를 실행할 step 수입니다."
+      },
+      "tail_actual_steps": {
+        "tooltip": "마지막에 항상 actual DiT forward를 실행할 step 수입니다."
+      },
+      "blend_w": {
+        "tooltip": "Chebyshev 예측과 Taylor 보간의 blend 비율입니다. 1.0이면 순수 Chebyshev입니다."
+      },
+      "cheby_degree": {
+        "tooltip": "Chebyshev polynomial degree입니다."
+      },
+      "ridge_lambda": {
+        "tooltip": "ridge regression 정규화 강도입니다."
+      },
+      "history_size": {
+        "tooltip": "forecaster가 유지할 관측 history buffer 크기입니다."
+      },
+      "enabled": {
+        "tooltip": "끄면 입력 MODEL을 그대로 반환합니다."
+      },
+      "one_sampler_only": {
+        "tooltip": "켜면 이 patched MODEL을 소비하는 첫 sampler run에만 Spectrum을 적용하고, 같은 workflow의 이후 sampler run은 그대로 통과시킵니다."
+      },
+      "verbose": {
+        "tooltip": "actual/cached step 결정을 로그로 출력합니다."
+      },
+      "compat_policy": {
+        "tooltip": "Spectrum이 DiT block을 건너뛰는 안전 기준입니다. legacy는 가장 빠른 기존 방식, conservative는 wrapper/shape/step/veto가 불안전하면 actual forward로 대체, strict는 exact artist mix나 multi-conditioning용으로 UUID가 있을 때만 cache를 허용합니다."
+      }
+    }
   }
 }
