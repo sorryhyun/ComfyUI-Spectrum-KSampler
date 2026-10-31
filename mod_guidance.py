@@ -14,6 +14,7 @@ import threading
 import time
 import urllib.request
 import weakref
+from collections import OrderedDict
 from typing import List, Optional
 
 import torch
@@ -752,6 +753,46 @@ def _extract_raw_and_t5(conditioning):
     return raw, t5_ids, t5_weights
 
 
+# TE module -> LRU of (text + TE state) -> (raw, t5_ids, t5_weights). Weak on the
+# module so the entries go when ComfyUI drops the loaded text encoder.
+_TEXT_CACHE = weakref.WeakKeyDictionary()
+_TEXT_CACHE_SIZE = 8
+
+
+def _encode_text_cached(clip, text):
+    """Encode `text` through `clip`, reusing the CPU tensors of an earlier run.
+
+    The sampler node executes on every seed, but quality_tags / quality_neg
+    rarely change, and ComfyUI's own node cache does not cover an encode made
+    inside the sampler. Callers must not write to the returned tensors.
+    """
+    entries = _TEXT_CACHE.setdefault(clip.cond_stage_model, OrderedDict())
+    key = (
+        text,
+        clip.patcher.patches_uuid,
+        clip.layer_idx,
+        repr(clip.tokenizer_options),
+    )
+    cached = entries.get(key)
+    if cached is not None:
+        entries.move_to_end(key)
+        return cached
+
+    tokens = clip.tokenize(text)
+    output = clip.encode_from_tokens(tokens, return_pooled=True, return_dict=True)
+    t5_ids = output.get("t5xxl_ids")
+    t5_weights = output.get("t5xxl_weights")
+    encoded = (
+        output["cond"][0].detach().cpu(),
+        t5_ids.detach().cpu() if t5_ids is not None else None,
+        t5_weights.detach().cpu() if t5_weights is not None else None,
+    )
+    entries[key] = encoded
+    while len(entries) > _TEXT_CACHE_SIZE:
+        entries.popitem(last=False)
+    return encoded
+
+
 def setup_mod_guidance(
     model_clone,
     clip,
@@ -813,15 +854,7 @@ def setup_mod_guidance(
     )
 
     # Encode quality tags via CLIP (same text encoder the sampler uses)
-    tokens = clip.tokenize(quality_tags)
-    output = clip.encode_from_tokens(tokens, return_pooled=True, return_dict=True)
-    tag_raw = output["cond"][0].detach().cpu()
-    tag_t5_ids = output.get("t5xxl_ids")
-    if tag_t5_ids is not None:
-        tag_t5_ids = tag_t5_ids.detach().cpu()
-    tag_t5_weights = output.get("t5xxl_weights")
-    if tag_t5_weights is not None:
-        tag_t5_weights = tag_t5_weights.detach().cpu()
+    tag_raw, tag_t5_ids, tag_t5_weights = _encode_text_cached(clip, quality_tags)
 
     # Extract positive (user prompt) and negative raw embeddings from CONDITIONING
     pos_raw, pos_t5_ids, pos_t5_weights = _extract_raw_and_t5(positive)
@@ -834,15 +867,7 @@ def setup_mod_guidance(
     # docs/proposal/mod_guidance_decoupled_negative.md). Empty → reuse the CFG
     # negative tensors, reproducing the pre-decoupling behavior bit-for-bit.
     if quality_neg and quality_neg.strip():
-        qtokens = clip.tokenize(quality_neg)
-        qout = clip.encode_from_tokens(qtokens, return_pooled=True, return_dict=True)
-        qneg_raw = qout["cond"][0].detach().cpu()
-        qneg_t5_ids = qout.get("t5xxl_ids")
-        if qneg_t5_ids is not None:
-            qneg_t5_ids = qneg_t5_ids.detach().cpu()
-        qneg_t5_weights = qout.get("t5xxl_weights")
-        if qneg_t5_weights is not None:
-            qneg_t5_weights = qneg_t5_weights.detach().cpu()
+        qneg_raw, qneg_t5_ids, qneg_t5_weights = _encode_text_cached(clip, quality_neg)
     else:
         qneg_raw, qneg_t5_ids, qneg_t5_weights = neg_raw, neg_t5_ids, neg_t5_weights
 
