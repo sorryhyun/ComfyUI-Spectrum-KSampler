@@ -3,11 +3,17 @@
 Adapters own only model identification, feature capture and the native output
 head. Forecast math and cache policy remain the existing Spectrum machinery.
 """
+import contextlib
 import logging
 from contextvars import ContextVar
 from dataclasses import dataclass
 
 import torch
+
+try:
+    from comfy.model_prefetch import pause_malloc_graph
+except ImportError:  # ComfyUI before the memory compiler
+    pause_malloc_graph = contextlib.nullcontext
 
 from .feature_forecast import TokenSpectrumState, _update_forecasters
 from .spectrum import (
@@ -49,7 +55,9 @@ def record_feature(module, tensor):
     capture = _NATIVE_CAPTURE.get()
     if capture is not None and capture[0] is module:
         _, state, extract = capture
-        state.features.append(extract(tensor).detach().clone())
+        # The copy outlives the block's memory compiler scope.
+        with pause_malloc_graph():
+            state.features.append(extract(tensor).detach().clone())
 
 
 def _capture_safe(adapter, dit, input_x, c, apply_model):

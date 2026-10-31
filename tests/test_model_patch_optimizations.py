@@ -128,5 +128,33 @@ class ModelPatchOptimizationsTest(unittest.TestCase):
         self.assertIsNone(model_patch._NATIVE_CAPTURE.get())
 
 
+    def test_feature_copy_is_allocated_outside_the_memory_compiler(self):
+        paused = []
+
+        class Pause:
+            def __enter__(self):
+                paused.append(True)
+
+            def __exit__(self, *args):
+                paused.pop()
+
+        class State:
+            features = []
+
+        def extract(tensor):
+            self.assertTrue(paused)
+            return tensor
+
+        module = object()
+        token = model_patch._NATIVE_CAPTURE.set((module, State, extract))
+        try:
+            with patch.object(model_patch, "pause_malloc_graph", Pause):
+                model_patch.record_feature(module, torch.zeros(1, 2, 3))
+        finally:
+            model_patch._NATIVE_CAPTURE.reset(token)
+        self.assertEqual(len(State.features), 1)
+        self.assertFalse(paused)
+
+
 if __name__ == "__main__":
     unittest.main()
