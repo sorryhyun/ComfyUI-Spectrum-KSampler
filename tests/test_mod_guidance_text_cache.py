@@ -1,31 +1,23 @@
-import ast
+import importlib.util
+import sys
 import unittest
-import weakref
-from collections import OrderedDict
 from pathlib import Path
 from types import SimpleNamespace
 
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]
-HELPERS = {"_TEXT_CACHE", "_TEXT_CACHE_SIZE", "_encode_text_cached"}
 
 
-def _load_helper():
-    tree = ast.parse((ROOT / "mod_guidance.py").read_text(encoding="utf-8"))
-    body = []
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef):
-            name = node.name
-        elif isinstance(node, ast.Assign):
-            name = getattr(node.targets[0], "id", None)
-        else:
-            continue
-        if name in HELPERS:
-            body.append(node)
-    namespace = {"OrderedDict": OrderedDict, "weakref": weakref}
-    exec(compile(ast.Module(body, []), "mod_guidance.py", "exec"), namespace)
-    return namespace
+def _load_module():
+    module_name = "spectrum_mod_guidance_text_cache_test"
+    spec = importlib.util.spec_from_file_location(
+        module_name, ROOT / "mod_guidance_text_cache.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class FakeCLIP:
@@ -50,8 +42,8 @@ class FakeCLIP:
 
 class EncodeTextCachedTest(unittest.TestCase):
     def setUp(self):
-        self.ns = _load_helper()
-        self.encode = self.ns["_encode_text_cached"]
+        self.module = _load_module()
+        self.encode = self.module._encode_text_cached
 
     def test_second_run_reuses_the_first_encode(self):
         clip = FakeCLIP()
@@ -85,12 +77,12 @@ class EncodeTextCachedTest(unittest.TestCase):
 
     def test_oldest_text_is_evicted(self):
         clip = FakeCLIP()
-        size = self.ns["_TEXT_CACHE_SIZE"]
+        size = self.module._TEXT_CACHE_SIZE
         for i in range(size + 1):
             self.encode(clip, str(i))
         self.encode(clip, "0")
         self.assertEqual(len(clip.encodes), size + 2)
-        self.assertEqual(len(self.ns["_TEXT_CACHE"][clip.cond_stage_model]), size)
+        self.assertEqual(len(self.module._TEXT_CACHE[clip.cond_stage_model]), size)
 
 
 if __name__ == "__main__":
