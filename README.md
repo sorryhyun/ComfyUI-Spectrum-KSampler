@@ -109,12 +109,13 @@ Why this matters: Spectrum forecasts DiT features from previous actual steps. In
 
 ### KSampler (Spectrum for MOSS)
 
-**KSampler (Spectrum for MOSS)** is a sampler for [MOSS-Image](https://github.com/OpenMOSS/MOSS-Image) models loaded by the `moss-image` node. It replaces the `ModelSamplingSD3` → `SkipLayerGuidanceDiTSimple` → `KSampler` chain of the official workflow, and its defaults are the MOSS pipeline's: shift 5, CFG 3 with block 22 skipped on the uncond branch, 50 Euler steps on `sgm_uniform`.
+**KSampler (Spectrum for MOSS)** is a sampler for [MOSS-Image](https://github.com/OpenMOSS/MOSS-Image) models, from ComfyUI's own loaders or the `moss-image` node. It replaces the model-sampling → `SkipLayerGuidanceDiTSimple` → `KSampler` chain of the official workflows, and its defaults are the MOSS pipeline's: shift 5, CFG 3 with block 22 skipped on the uncond branch, 50 Euler steps on `sgm_uniform`.
 
 ```
 MOSS-Image loader -> KSampler (Spectrum for MOSS) -> VAE Decode
 ```
 
+- **Model.** On ComfyUI's own MOSS-Image model the node applies `ModelSamplingAuraFlow` and the patch below, and `compile` is ignored. On a `moss-image` DiT it applies `ModelSamplingSD3`, and the rest of this list holds.
 - **Spectrum.** MOSS has no Anima-style `final_layer`, so the node forecasts the image tokens entering MOSS's head (`final_norm_video`). On cached steps it runs only the time embedding and the head, skipping the text refiner and all blocks. Cond and uncond are forecast separately. At 50 steps, `flex_window` 0.5 gives 19 actual forwards (anima_lora's MOSS bench default).
 - **Compile** (`compile`, on by default). The node runs `torch.compile` on each of `diffusion_model.layers` with dynamic shapes. MOSS never pads prompts, so the joint length changes with every prompt and between cond and uncond. Compilation happens on the first sample. Without a C++ compiler the node falls back to eager. Compiled blocks need a non-dynamic-VRAM copy of the DiT. The node builds that copy once per checkpoint and reuses it, so it stays in host RAM next to ComfyUI's own copy.
 - **Measured** sampling time (1024², 50 steps, NVIDIA GeForce RTX 5070 Ti): stock `ModelSamplingSD3` → `SkipLayerGuidanceDiTSimple` → `KSampler` 68 s; this node 25.9 s with compile off, 21.2 s with compile on.
@@ -130,7 +131,7 @@ ComfyUI MOSS MODEL -> Spectrum Model Patch (MOSS) -> KSampler / Custom Sampler
 
 It preserves model sampling, CFG and flow shift. Each sampler invocation gets fresh forecast state from its actual sigma schedule; the patch's `steps` input is ignored.
 ControlNet inputs, active scheduled weight hooks and replacement of the last transformer block fall back to actual forwards. Existing Spectrum cache policy still applies.
-The original **KSampler (Spectrum for MOSS)** above remains the option for the custom `moss-image` loader.
+**KSampler (Spectrum for MOSS)** above uses this patch on that model, with the shift and uncond skip built in.
 
 ### Standalone correction patchers
 

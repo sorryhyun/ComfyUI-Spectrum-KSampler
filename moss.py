@@ -338,7 +338,7 @@ class MossSpectrumKSampler:
 
         return {
             "required": {
-                "model": ("MODEL", {"tooltip": "MOSS-Image MODEL (moss-image loader)."}),
+                "model": ("MODEL", {"tooltip": "MOSS-Image MODEL."}),
                 "seed": (
                     "INT",
                     {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF, "control_after_generate": True},
@@ -351,7 +351,7 @@ class MossSpectrumKSampler:
                 "negative": ("CONDITIONING",),
                 "latent_image": ("LATENT",),
                 "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "shift": _float(5.0, 0.0, 100.0, 0.01, "Flow shift (ModelSamplingSD3). MOSS pipeline: 5."),
+                "shift": _float(5.0, 0.0, 100.0, 0.01, "Flow shift. MOSS pipeline: 5."),
                 "uncond_skip_layers": (
                     "STRING",
                     {
@@ -378,7 +378,8 @@ class MossSpectrumKSampler:
                         "tooltip": (
                             "torch.compile each of the DiT's blocks (inductor, "
                             "dynamic shapes). Compiles on the first sample; falls "
-                            "back to eager without a C++ compiler."
+                            "back to eager without a C++ compiler. moss-image node "
+                            "only: ignored on ComfyUI's own MOSS-Image model."
                         ),
                     },
                 ),
@@ -413,13 +414,21 @@ class MossSpectrumKSampler:
         compile=True,
     ):
         import nodes
-        from comfy_extras.nodes_model_advanced import ModelSamplingSD3
+        from comfy_extras.nodes_model_advanced import ModelSamplingAuraFlow, ModelSamplingSD3
         from comfy_extras.nodes_slg import SkipLayerGuidanceDiTSimple
 
-        m = apply_moss_spectrum_patch(
-            model, steps=steps, flex_window=flex_window, enabled=spectrum, compile=compile
-        )
-        m = ModelSamplingSD3().patch(m, shift)[0]
+        if hasattr(model.model.diffusion_model, "preprocess_refs"):
+            # ComfyUI's own MOSSImage: timestep sigma, not 1000 * sigma, so the AuraFlow
+            # multiplier, and its own forecast capture; its blocks are not compiled.
+            from .model_patch_moss import apply_moss_model_patch
+
+            m = apply_moss_model_patch(model, steps=steps, flex_window=flex_window, enabled=spectrum)
+            m = ModelSamplingAuraFlow().patch_aura(m, shift)[0]
+        else:
+            m = apply_moss_spectrum_patch(
+                model, steps=steps, flex_window=flex_window, enabled=spectrum, compile=compile
+            )
+            m = ModelSamplingSD3().patch(m, shift)[0]
         if uncond_skip_layers.strip():
             m = SkipLayerGuidanceDiTSimple.execute(
                 m, 0.0, 1.0, double_layers="", single_layers=uncond_skip_layers

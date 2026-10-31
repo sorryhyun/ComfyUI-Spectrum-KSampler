@@ -493,7 +493,7 @@
     "description": "MOSS-Image용 KSampler입니다. flow shift, uncond block 22 skip, Spectrum forecasting, block별 compile을 한 노드에서 처리합니다. ModelSamplingSD3 + SkipLayerGuidanceDiTSimple + KSampler를 대체합니다.",
     "inputs": {
       "model": {
-        "tooltip": "MOSS-Image MODEL입니다(moss-image loader)."
+        "tooltip": "MOSS-Image MODEL입니다."
       },
       "seed": {
         "tooltip": "noise 생성에 쓰는 random seed입니다."
@@ -523,7 +523,7 @@
         "tooltip": "denoise 강도입니다."
       },
       "shift": {
-        "tooltip": "flow shift(ModelSamplingSD3)입니다. MOSS pipeline 기본값은 5입니다."
+        "tooltip": "flow shift입니다. MOSS pipeline 기본값은 5입니다."
       },
       "uncond_skip_layers": {
         "tooltip": "uncond branch에서 건너뛸 block 번호입니다(쉼표 구분, 비우면 일반 CFG). MOSS pipeline 기본값은 22입니다."
@@ -535,7 +535,7 @@
         "tooltip": "actual forward 이후 Spectrum window 크기를 늘리는 값입니다. 50 step 기준 0.25 / 0.5 / 1.0이면 actual forward가 22 / 19 / 16번입니다."
       },
       "compile": {
-        "tooltip": "DiT block마다 torch.compile(inductor, dynamic shape)을 겁니다. 첫 sample에서 컴파일하며, C++ 컴파일러가 없으면 eager로 실행합니다."
+        "tooltip": "DiT block마다 torch.compile(inductor, dynamic shape)을 겁니다. 첫 sample에서 컴파일하며, C++ 컴파일러가 없으면 eager로 실행합니다. moss-image 노드 전용이며 ComfyUI 자체 MOSS-Image 모델에서는 무시됩니다."
       }
     }
   },

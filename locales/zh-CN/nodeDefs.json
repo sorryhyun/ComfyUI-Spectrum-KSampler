@@ -493,7 +493,7 @@
     "description": "MOSS-Image 的 KSampler：在一个节点内完成 flow shift、uncond 跳过 block 22、Spectrum 预测与逐 block compile。替代 ModelSamplingSD3 + SkipLayerGuidanceDiTSimple + KSampler。",
     "inputs": {
       "model": {
-        "tooltip": "MOSS-Image MODEL（moss-image loader）。"
+        "tooltip": "MOSS-Image MODEL。"
       },
       "seed": {
         "tooltip": "生成噪声所用的随机种子。"
@@ -523,7 +523,7 @@
         "tooltip": "去噪强度。"
       },
       "shift": {
-        "tooltip": "flow shift（ModelSamplingSD3）。MOSS pipeline 默认 5。"
+        "tooltip": "flow shift。MOSS pipeline 默认 5。"
       },
       "uncond_skip_layers": {
         "tooltip": "在 uncond 分支跳过的 block 编号（逗号分隔，留空为普通 CFG）。MOSS pipeline 默认 22。"
@@ -535,7 +535,7 @@
         "tooltip": "每次 actual forward 后 Spectrum window 的增长量。50 步时 0.25 / 0.5 / 1.0 分别运行 22 / 19 / 16 次 actual forward。"
       },
       "compile": {
-        "tooltip": "对每个 DiT block 做 torch.compile（inductor，动态 shape）。在第一次采样时编译；没有 C++ 编译器时以 eager 运行。"
+        "tooltip": "对每个 DiT block 做 torch.compile（inductor，动态 shape）。在第一次采样时编译；没有 C++ 编译器时以 eager 运行。仅用于 moss-image 节点，在 ComfyUI 自带的 MOSS-Image 模型上会被忽略。"
       }
     }
   },
