@@ -75,6 +75,15 @@ def _ensure_capture_hook(dit) -> None:
     norm._spectrum_hook_installed = True
 
 
+def _is_native(dit) -> bool:
+    """ComfyUI's own MOSSImage, any release (0.42.x has no ``preprocess_refs``)."""
+    try:
+        from comfy.ldm.moss_image.model import MOSSImage
+    except ImportError:
+        return False
+    return isinstance(dit, MOSSImage)
+
+
 def _require_moss(model):
     base = getattr(model, "model", None)
     dit = getattr(base, "diffusion_model", None)
@@ -417,7 +426,7 @@ class MossSpectrumKSampler:
         from comfy_extras.nodes_model_advanced import ModelSamplingAuraFlow, ModelSamplingSD3
         from comfy_extras.nodes_slg import SkipLayerGuidanceDiTSimple
 
-        if hasattr(model.model.diffusion_model, "preprocess_refs"):
+        if _is_native(model.model.diffusion_model):
             # ComfyUI's own MOSSImage: timestep sigma, not 1000 * sigma, so the AuraFlow
             # multiplier, and its own forecast capture; its blocks are not compiled.
             from .model_patch_moss import apply_moss_model_patch
