@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 # Anima γ, bundled (anima_lora scripts/calibration/cns_calibrate.py: cfg 4,
-# 28 steps, fp32 stream).
+# 28 steps, fp32 stream, 3 aspects × 16 captions).
 DEFAULT_GAMMA_PATH = os.path.join(_HERE, "cns_gamma.npz")
 
 CNS_SAMPLER_NAME = "er_sde_cns"
