@@ -24,7 +24,7 @@ match the CLI's ``ERSDESampler._sample_noise`` bit-for-bit). With CNS disabled
 the math is identical to stock ``er_sde``.
 
 Notes:
-  * **Anima- and MOSS-calibrated.** The auto-downloaded γ is measured on
+  * **Anima- and MOSS-calibrated.** The bundled Anima γ is measured on
     Anima's spectral-bias staircase at cfg=4. A MOSS-Image model (detected from
     the live diffusion_model) switches to a bundled MOSS γ — Base or SFT by a
     weight fingerprint, at the calibrated cfg (3/4/5) nearest the guider's — and
@@ -41,117 +41,25 @@ from __future__ import annotations
 import logging
 import os
 import threading
-import time
-import urllib.request
-from typing import Optional
 
 import numpy as np
 import torch
 
-import folder_paths
-
 logger = logging.getLogger(__name__)
 
-# Shipped completion-matrix artifact. Tiny (~6KB); auto-downloaded on first use
-# into models/anima_cns/ (same convention as the DCW calibrator). Bump the tag +
-# this URL together when γ is recalibrated.
-DEFAULT_GAMMA_FILENAME = "cns_gamma.npz"
-DEFAULT_GAMMA_URL = (
-    "https://github.com/sorryhyun/ComfyUI-Spectrum-KSampler/releases/download/"
-    "0530/cns_gamma.npz"
-)
-DEFAULT_GAMMA_SUBDIR = "anima_cns"
+_HERE = os.path.dirname(os.path.abspath(__file__))
+# Anima γ, bundled (anima_lora scripts/calibration/cns_calibrate.py: cfg 4,
+# 28 steps, fp32 stream).
+DEFAULT_GAMMA_PATH = os.path.join(_HERE, "cns_gamma.npz")
 
 CNS_SAMPLER_NAME = "er_sde_cns"
-
-_DOWNLOAD_LOCK = threading.Lock()
-
-
-# ---------------------------------------------------------------------------
-# Auto-download (mirrors dcw_calibrator.get_default_calibrator_path)
-# ---------------------------------------------------------------------------
-
-
-def get_default_gamma_path() -> str:
-    """Return the local path to the shipped γ matrix, downloading it if missing."""
-    target_dir = os.path.join(folder_paths.models_dir, DEFAULT_GAMMA_SUBDIR)
-    target_path = os.path.join(target_dir, DEFAULT_GAMMA_FILENAME)
-    if os.path.exists(target_path) and os.path.getsize(target_path) > 0:
-        return target_path
-
-    with _DOWNLOAD_LOCK:
-        if os.path.exists(target_path) and os.path.getsize(target_path) > 0:
-            return target_path
-        try:
-            os.makedirs(target_dir, exist_ok=True)
-        except OSError as e:
-            raise RuntimeError(
-                f"CNS: cannot create directory {target_dir} ({e}). "
-                f"If ComfyUI is installed under Program Files, move it or run as admin. "
-                f"Otherwise download manually from {DEFAULT_GAMMA_URL} and place it at {target_path}."
-            ) from e
-        tmp_path = target_path + ".download"
-        logger.info(f"CNS: downloading default γ matrix from {DEFAULT_GAMMA_URL}")
-        try:
-            req = urllib.request.Request(
-                DEFAULT_GAMMA_URL,
-                headers={"User-Agent": "comfyui-spectrum/cns"},
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                total = int(resp.headers.get("Content-Length") or 0)
-                downloaded = 0
-                with open(tmp_path, "wb") as fh:
-                    while True:
-                        chunk = resp.read(128 * 1024)
-                        if not chunk:
-                            break
-                        fh.write(chunk)
-                        downloaded += len(chunk)
-                if total and downloaded != total:
-                    raise RuntimeError(
-                        f"truncated download: got {downloaded} of {total} bytes"
-                    )
-        except Exception as e:
-            if os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
-            raise RuntimeError(
-                f"CNS: failed to download γ matrix from {DEFAULT_GAMMA_URL} ({e}). "
-                f"If this is a corporate network or TLS-intercepting proxy, try `pip install -U certifi`. "
-                f"Otherwise download manually and place the file at {target_path}."
-            ) from e
-        last_err: Optional[Exception] = None
-        for attempt in range(5):
-            try:
-                os.replace(tmp_path, target_path)
-                last_err = None
-                break
-            except PermissionError as e:
-                last_err = e
-                time.sleep(0.2 * (attempt + 1))
-        if last_err is not None:
-            if os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
-            raise RuntimeError(
-                f"CNS: γ matrix downloaded but could not rename into place ({last_err}). "
-                f"This is usually Windows antivirus holding the file open. "
-                f"Try adding {target_dir} to your AV exclusions, or download manually from "
-                f"{DEFAULT_GAMMA_URL} and place it at {target_path}."
-            ) from last_err
-        logger.info(f"CNS: saved γ matrix to {target_path}")
-        return target_path
 
 
 # ---------------------------------------------------------------------------
 # Recolorer — numerics imported from the shared anima_lora core (resolved against
 # the live tree or the ``_vendor/`` subset by the sys.path bootstrap in
-# __init__.py). Only the γ-artifact path resolution (ComfyUI models dir +
-# auto-download) is node-specific, so this subclass adds just ``from_path``.
+# __init__.py). Only the γ-artifact path is node-specific, so this subclass adds
+# just ``from_path``.
 # ---------------------------------------------------------------------------
 
 from library.inference.corrections.cns_core import (
@@ -161,12 +69,12 @@ from library.inference.corrections.cns_core import radial_bins  # noqa: F401
 
 
 class CNSRecolorer(_CNSRecolorerCore):
-    """CNS recolorer with the node's ComfyUI-models-dir γ-artifact resolution."""
+    """CNS recolorer with the node's bundled γ as ``"auto"``."""
 
     @classmethod
     def from_path(cls, path: str, strength: float = 1.0) -> "CNSRecolorer":
-        """Load from an npz path, or the literal ``"auto"`` (auto-downloaded)."""
-        resolved = get_default_gamma_path() if path == "auto" else path
+        """Load from an npz path, or the literal ``"auto"`` (the bundled γ)."""
+        resolved = DEFAULT_GAMMA_PATH if path == "auto" else path
         return cls.from_npz(resolved, strength=strength)
 
 
@@ -180,7 +88,6 @@ class CNSRecolorer(_CNSRecolorerCore):
 # (c pi pj), the same order.
 # ---------------------------------------------------------------------------
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
 # (variant, cfg) → γ; mirrors anima_lora library.moss.cns.GAMMA_PATHS.
 MOSS_GAMMAS = {
     ("base", 3.0): "moss_cns_gamma.npz",
@@ -282,7 +189,7 @@ def _load_gamma_arrays(family: str) -> dict:
     if family not in _GAMMA_ARRAYS:
         with _GAMMA_LOCK:
             if family not in _GAMMA_ARRAYS:
-                path = MOSS_GAMMA_PATHS.get(family) or get_default_gamma_path()
+                path = MOSS_GAMMA_PATHS.get(family) or DEFAULT_GAMMA_PATH
                 d = np.load(path)
                 _GAMMA_ARRAYS[family] = {k: d[k] for k in ("gamma", "aspects", "sigmas")}
                 logger.info("CNS: %s γ from %s", family, path)
