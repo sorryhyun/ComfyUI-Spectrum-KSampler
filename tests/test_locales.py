@@ -192,6 +192,7 @@ EXPECTED_INPUTS = {
 
 
 EXPECTED_INPUTS["SpectrumMossModelPatch"] = EXPECTED_INPUTS["DiTSpectrumPatchAdvanced"].copy()
+EXPECTED_INPUTS["SpectrumKrea2ModelPatch"] = EXPECTED_INPUTS["DiTSpectrumPatchAdvanced"].copy()
 
 
 def _load(locale):

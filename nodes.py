@@ -1825,6 +1825,50 @@ class SpectrumMossModelPatch(DiTSpectrumPatchAdvanced):
         ),)
 
 
+class SpectrumKrea2ModelPatch(DiTSpectrumPatchAdvanced):
+    """Experimental forecast-only MODEL patch for native ComfyUI Krea2."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        inputs = super().INPUT_TYPES()
+        inputs["required"]["model"] = ("MODEL", {
+            "tooltip": "Krea2 MODEL from ComfyUI's built-in loader. Experimental forecast acceleration; inspect image quality.",
+        })
+        for field, value in {"steps": 8, "warmup_steps": 3, "tail_actual_steps": 2,
+                             "cheby_degree": 1, "history_size": 8}.items():
+            inputs["required"][field][1]["default"] = value
+        inputs["required"]["steps"][1]["tooltip"] = (
+            "Ignored. The downstream sampler's actual sigma schedule is used."
+        )
+        inputs["required"]["compat_policy"] = (COMPAT_POLICIES, {"default": "conservative"})
+        return inputs
+
+    DESCRIPTION = (
+        "Experimental Spectrum forecasting for Krea2 loaded by ComfyUI's built-in loader. "
+        "Preserves sampling, CFG and flow shift; "
+        "no trained guidance, SPD or compile. Fresh state for each sampler/crop/tile. "
+        "Reference-image and unsupported wrapper paths use actual forwards. "
+        "Defaults are Turbo starting values. RAW uses the downstream sampler's steps, CFG and shift. "
+        "Short schedules leave limited acceleration room; compare against disabled output."
+    )
+
+    def patch(
+        self, model, steps=8, window_size=2.0, flex_window=0.25, warmup_steps=3,
+        tail_actual_steps=2, blend_w=0.3, cheby_degree=1, ridge_lambda=0.1,
+        history_size=8, enabled=True, one_sampler_only=False, verbose=False,
+        compat_policy="conservative",
+    ):
+        from .model_patch_krea2 import apply_krea2_model_patch
+
+        return (apply_krea2_model_patch(
+            model, steps=steps, window_size=window_size, flex_window=flex_window,
+            warmup_steps=warmup_steps, tail_actual_steps=tail_actual_steps,
+            blend_w=blend_w, cheby_degree=cheby_degree, ridge_lambda=ridge_lambda,
+            history_size=history_size, enabled=enabled, one_sampler_only=one_sampler_only,
+            verbose=verbose, compat_policy=compat_policy,
+        ),)
+
+
 class SpectrumSPDKSampler:
     """KSampler (Spectrum + SPD) — the SPEED sampler.
 
@@ -2030,6 +2074,7 @@ NODE_CLASS_MAPPINGS = {
     "DiTSpectrumPatchAdvanced": DiTSpectrumPatchAdvanced,
     "MossSpectrumKSampler": MossSpectrumKSampler,
     "SpectrumMossModelPatch": SpectrumMossModelPatch,
+    "SpectrumKrea2ModelPatch": SpectrumKrea2ModelPatch,
     # Deprecated aliases — the mod-guidance + SEA samplers are now folded into
     # the unified SpectrumKSampler (mod_w_profile + refresh_ratio dials). These
     # keys are kept so saved workflows referencing them still load; they are
@@ -2050,4 +2095,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "DiTSpectrumPatchAdvanced": "DiT Spectrum Patch Advanced",
     "MossSpectrumKSampler": "KSampler (Spectrum for MOSS)",
     "SpectrumMossModelPatch": "Spectrum Model Patch (MOSS)",
+    "SpectrumKrea2ModelPatch": "Spectrum Model Patch (Krea2)",
 }
